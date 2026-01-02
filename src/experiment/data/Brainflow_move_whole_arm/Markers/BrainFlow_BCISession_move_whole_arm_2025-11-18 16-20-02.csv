@@ -1,0 +1,8 @@
+time,marker_id,description
+0.0003313,10,Rest period started
+5.0003313,20,Action period started
+10.0006501,10,Rest period started
+15.0006501,20,Action period started
+20.0010542,10,Rest period started
+25.0010542,20,Action period started
+30.0010542,0,Experiment ended

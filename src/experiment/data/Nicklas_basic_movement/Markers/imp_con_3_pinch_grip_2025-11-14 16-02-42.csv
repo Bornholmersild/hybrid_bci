@@ -1,0 +1,32 @@
+time,marker_id,description
+0.0004978,10,Rest period started
+2.0004978,20,Action period started
+7.0004978,30,Rest period started
+9.0006832,10,Rest period started
+11.0006832,20,Action period started
+16.0006832,30,Rest period started
+18.0009487,10,Rest period started
+20.0009487,20,Action period started
+25.0009487,30,Rest period started
+27.0011325,10,Rest period started
+29.0011325,20,Action period started
+34.0011325,30,Rest period started
+36.0013609,10,Rest period started
+38.0013609,20,Action period started
+43.0013609,30,Rest period started
+45.0015679,10,Rest period started
+47.0015679,20,Action period started
+52.0015679,30,Rest period started
+54.0018258,10,Rest period started
+56.0018258,20,Action period started
+61.0018258,30,Rest period started
+63.0020755,10,Rest period started
+65.0020755,20,Action period started
+70.0020755,30,Rest period started
+72.0023002,10,Rest period started
+74.0023002,20,Action period started
+79.0023002,30,Rest period started
+81.0025527,10,Rest period started
+83.0025527,20,Action period started
+88.0025527,30,Rest period started
+90.0025527,0,Experiment ended

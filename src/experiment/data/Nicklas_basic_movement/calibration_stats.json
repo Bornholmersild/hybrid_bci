@@ -1,0 +1,10 @@
+{
+    "ch1 : Flexor digitorum superficialis": {
+        "baseline_noise": -0.015213549252594587,
+        "MVC": 0.6234720931388438
+    },
+    "ch2 : Flexor pollicis longus": {
+        "baseline_noise": -0.004370212617939419,
+        "MVC": 0.13379266601987183
+    }
+}
