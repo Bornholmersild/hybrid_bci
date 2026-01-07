@@ -59,7 +59,7 @@ def create_file_header(filepath):
                 delimiter=',', fmt='%s')
 
 def execute_protocol(num_epochs: int, rest_duration: float = 5.0, action_duration: float = 5.0, 
-                    release_duration: float = 5.0, trim_epoch = 1.0, filepath: str | None = None, 
+                    release_duration: float = 5.0, filepath: str | None = None, 
                     barrier: Barrier | None = None):
     """Execute the experimental protocol.
     
@@ -68,16 +68,12 @@ def execute_protocol(num_epochs: int, rest_duration: float = 5.0, action_duratio
         rest_duration (float, optional): Duration of rest period in seconds. Defaults to 5.0.
         action_duration (float, optional): Duration of action period in seconds. Defaults to 5.0.
         release_duration (float, optional): Duration of release period in seconds. Defaults to 5.0.
-        trim_epoch (float, optional): Used to trim data and make uniformal samples. Defaults to 1.0
         filepath (str, optional): Path to save markers. Defaults to None.
         barrier (multiprocessing.Barrier, optional): Synchronization barrier. Defaults to None.
     """
     create_file_header(filepath=filepath)
     file_handler = open(filepath, 'a', buffering = 1, newline='')
-    # print("[OK] Experimental is ready.\n Begin in...")
-    # for i in range(7):
-    #     print(f'MVC protocol starts in {7-i}', end='\r')
-    #     time.sleep(1)
+
     print("PROTOCOL - [OK] Waiting for barrier.")
     if barrier is not None:
         barrier.wait()
@@ -105,7 +101,6 @@ def execute_protocol(num_epochs: int, rest_duration: float = 5.0, action_duratio
         # Rest period
         playsound(RELEASE_BEEP, block=False)
         print('RELEASE')
-        # print('Release')
         log_marker(file_handler, diff(t0, t2), marker_id=REL, description="Rest period started")
         t3 = at(t_epoch, rest_duration + action_duration + release_duration)
         wait_until(t3)

@@ -310,7 +310,7 @@ def main():
     #--------------------------------------#
     # Select how data should be visualized #
     #--------------------------------------#
-    vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, which_finger = which_finger, num_epochs = NUM_EPOCHS, trial_period = TRIAL_PERIOD)
+    #vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, which_finger = which_finger, num_epochs = NUM_EPOCHS, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, which_finger = which_finger, num_epochs = NUM_EPOCHS, trial_period = TRIAL_PERIOD)
 
     #vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean[which_finger], rms = RMS_epoch_mean[which_finger], markers = markers[which_finger], display_window = 0)
