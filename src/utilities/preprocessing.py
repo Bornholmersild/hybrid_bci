@@ -1,7 +1,6 @@
 from scipy import signal
 from matplotlib import pyplot as plt
 import numpy as np
-import pywt
 from scipy.signal import resample
 
 class Filtering:
@@ -220,23 +219,24 @@ class EEG_preprocessing(Filtering):
 
         return signal[:, keep_idx], keep_idx
     
+    ''' continous_wavelet_transform function
     def continous_wavelet_transform(self, epoch_data):
-        """
-        Perform continuous wavelet transform on multi-epoch, multi-channel data.
-        Returns full time-frequency maps for each epoch and channel.
+        
+        # Perform continuous wavelet transform on multi-epoch, multi-channel data.
+        # Returns full time-frequency maps for each epoch and channel.
 
-        Parameters
-        ----------
-        epoch_data : ndarray
-            Shape (n_epochs, n_channels, n_samples)
+        # Parameters
+        # ----------
+        # epoch_data : ndarray
+        #     Shape (n_epochs, n_channels, n_samples)
 
-        Returns
-        -------
-        X_wt_all : ndarray
-            Shape (n_channels, n_epochs, n_freqs, n_samples)
-        wt_freqs : ndarray
-            Frequencies corresponding to the scales
-        """
+        # Returns
+        # -------
+        # X_wt_all : ndarray
+        #     Shape (n_channels, n_epochs, n_freqs, n_samples)
+        # wt_freqs : ndarray
+        #     Frequencies corresponding to the scales
+        
         wt_obj = "cmor1.5-1.0"
         wt_dt = 1/self.fs
         wt_freqs_interst = np.linspace(6, 32, 50)
@@ -270,6 +270,7 @@ class EEG_preprocessing(Filtering):
             X_wt_all.append(X_wt)
         
         return np.array(X_wt_all, dtype=float), wt_freqs
+    '''
 
 class EMG_preprocessing(Filtering):
     def __init__(self, fs = 2000):
