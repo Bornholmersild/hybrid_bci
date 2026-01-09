@@ -6,16 +6,17 @@ import msvcrt
 from multiprocessing import JoinableQueue, Process, Barrier, Event
 import threading
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 # Manage time
 from datetime import datetime
 
 # Own implementation
-from ..utilities.dynamixel_control import main as MC
 from .EMG_collector import EMG_con as EMG
 from .EEG_collector import EEG_con as EEG
+from ..utilities.dynamixel_control import main as MC
 from ..utilities.create_record_folders import create_recording_folder
+from ..utilities.cue_gui import run_gui
 from ..experiment.experimental_protocol import PROTOCOL_con as PROTOCOL
        
 current_dir = Path(__file__).resolve().parent     # folder of current script
@@ -37,7 +38,15 @@ MC_PORT = 'COM8'                                        # Define MC port
 EEG_PORT = 'COM9'                                       # Define EEG port
 EMG_SELECT_SENSORS = (0, 2)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
 EMG_SAMPLES_PER_READ = 1000                             # Samples per read for the EMG sensors
-
+MODES = {
+    "MC _ _":    ["MC", "PRO"],
+    "MC EEG _":  ["MC", "EEG", "PRO"],
+    "MC _ EMG":  ["MC", "EMG", "PRO"],
+    "_ EEG _":   ["EEG", "PRO"],
+    "_ EEG EMG": ["EEG", "EMG", "PRO"],
+    "_ _ EMG":   ["EMG", "PRO"],
+    "all":       ["MC", "EEG", "EMG", "PRO"],
+}
 ''' BEFORE EXECUTION
 * Note which COM port is in use
 * EMG class : select_sensors and samples_per_read can be changed depending on usecase
@@ -67,6 +76,10 @@ def EMG_start(q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_init, barrier_execute):
     print('EMG - Starting process.')
     emg_ins.start(q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_execute)
 
+def GUI_start(q_r_PRO : JoinableQueue, which_finger : str, barrier_init : Any | None):
+    run_gui(event_queue = q_r_PRO, which_finger = which_finger, barrier_init = barrier_init)
+    print('GUI - Starting process.')
+
 def PROTOCOL_start(q_PRO, q_i_PRO, q_r_PRO, barrier_init, barrier_execute, shutdown_event):
     protocol_ins = PROTOCOL(num_epochs = NUM_EPOCHS,
                             rest_duration = REST_DURATION,
@@ -78,6 +91,22 @@ def PROTOCOL_start(q_PRO, q_i_PRO, q_r_PRO, barrier_init, barrier_execute, shutd
     protocol_ins.start(q_PRO, q_i_PRO, q_r_PRO, barrier_execute)
     
     shutdown_event.set()        # Set shutdown_event to terminate all processes
+
+#---------------#
+# Configuration #
+#---------------#
+@dataclass
+class OWN_PROCESS:
+    name : str
+    start_func : callable
+
+OWN_PROCESSES = {
+    'MC' : OWN_PROCESS('MC', MC_start),
+    'EEG' : OWN_PROCESS('EEG', EEG_start),
+    'EMG' : OWN_PROCESS('EMG', EMG_start),
+    'PRO' : OWN_PROCESS('PRO', PROTOCOL_start),
+    'GUI' : OWN_PROCESS('GUI', GUI_start),
+}
 
 def send_command_queue(q_i_MC, q_i_EEG, q_i_EMG, q_i_PRO, instruction, method):
     active = MODES[method]
@@ -136,18 +165,18 @@ def listen_for_terminal_input(q_i_MC : Optional[JoinableQueue],
         instructions = [('stop', None)] * 4
         send_command_queue(q_i_MC, q_i_EEG, q_i_EMG, q_i_PRO, instructions, select_method)
 
-def build_system(active_sensors : dict):
+def build_system(active_modes : Dict):
     """
-    Build queues, processes, and barriers corresponding to the number of active sensors.
+    Build queues, processes, and barriers corresponding to the number of active processes.
 
     Parameters
     ----------
-    active_sensors : dict
-        Dictionary describing the selected MODE and its active sensors.
+    active_modes : Dict
+        Dictionary describing the selected MODE and its active processes.
 
     Returns
     -------
-    queues : dict
+    queues : Dict
         Mapping from sensor name to a tuple of communication queues:
         (q_main, q_ICOM, q_RCOM).
         Example:
@@ -163,17 +192,17 @@ def build_system(active_sensors : dict):
     barrier_init : multiprocessing.Barrier
         Barrier used to synchronize initialization of all sensor processes.
 
-    barrier_exec : multiprocessing.Barrier
-        Barrier used to synchronize execution across all sensor processes.
+    shutdown_event : multiprocessing.Event
+        Whenever the experimental protocol terminates. shutdown_event is set and allows all processes to terminate via listen_for_terminal_input()
     """
     queues = {}
     processes = []
 
-    num_sensors = len(active_sensors)
-    barrier_init = Barrier(num_sensors + 1)     # Purpose: To hold processes until all is initilized + listen_for_terminal_input function
-    barrier_exec = Barrier(num_sensors)         # Purpose: To hold processes to insure all is syncronized
+    num_modes = len(active_modes)
+    barrier_init = Barrier(num_modes + 2)     # Purpose: To hold processes until all is initilized + listen_for_terminal_input Thread and GUI_START Process
+    barrier_exec = Barrier(num_modes)         # Purpose: To hold processes to insure all is syncronized
 
-    for key in active_sensors:
+    for key in active_modes:
         # Queues for inter-process communications
         q_main = JoinableQueue(100)                 # Purpose: Queue to main process
         q_i = JoinableQueue(100)                    # Purpose: Queue to receive instructions from main process
@@ -188,37 +217,12 @@ def build_system(active_sensors : dict):
             args = (q_main, q_i, q_r, barrier_init, barrier_exec)
 
         process_temp = Process(
-            target = SENSORS[key].start_func,
+            target = OWN_PROCESS[key].start_func,
             args = args
         )
         processes.append(process_temp)
     
     return queues, processes, barrier_init, shutdown_event
-
-#---------------#
-# Configuration #
-#---------------#
-@dataclass
-class Sensor:
-    name : str
-    start_func : callable
-
-SENSORS = {
-    'MC' : Sensor('MC', MC_start),
-    'EEG' : Sensor('EEG', EEG_start),
-    'EMG' : Sensor('EMG', EMG_start),
-    'PRO' : Sensor('PRO', PROTOCOL_start),
-}
-
-MODES = {
-    "MC _ _":    ["MC", "PRO"],
-    "MC EEG _":  ["MC", "EEG", "PRO"],
-    "MC _ EMG":  ["MC", "EMG", "PRO"],
-    "_ EEG _":   ["EEG", "PRO"],
-    "_ EEG EMG": ["EEG", "EMG", "PRO"],
-    "_ _ EMG":   ["EMG", "PRO"],
-    "all":       ["MC", "EEG", "EMG", "PRO"],
-}
 
 
 def main():
@@ -227,7 +231,7 @@ def main():
 
     active = MODES[METHOD]             # Extract the mode from the desired argument
 
-    queues, processes, barrier_init, shutdown_event  = build_system(active)
+    queues, processes, barrier_init, shutdown_event  = build_system(active, which_finger = FINGER_NAME)
 
     # What is [1] -> Get the q_i for each process.
     # If a process is not active, default set value (q_main, q_i, q_r) to None 
@@ -235,6 +239,11 @@ def main():
     q_EEG = queues.get('EEG', (None, None, None))[1]
     q_EMG = queues.get('EMG', (None, None, None))[1]
     q_PRO = queues.get('PRO', (None, None, None))[1]
+    q_PRO_r = queues.get('PRO', (None, None, None))[2]
+    
+    # Initilize gui process separatly, because it does not need queues.
+    # It require to receive protocol messenges 
+    gui_process = Process(target = GUI_start, args = (q_PRO_r, FINGER_NAME, barrier_init))
 
     terminal = threading.Thread(
         target = listen_for_terminal_input,
@@ -242,6 +251,7 @@ def main():
         daemon = True
     )
 
+    gui_process.start()
     for p in processes:
         p.start()
 

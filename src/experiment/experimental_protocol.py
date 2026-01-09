@@ -1,5 +1,4 @@
 import time
-from pathlib import Path
 from playsound3 import playsound
 import numpy as np
 from multiprocessing.synchronize import Barrier  # Import the proper Barrier type
@@ -7,24 +6,40 @@ from multiprocessing import JoinableQueue
 import os
 
 class PROTOCOL_con():
+    """
+    Protocol contructor
+        
+    Parameter
+    ---------
+    num_epochs : int 
+        Number of epochs to run
+    rest_duration : int 
+        Duration of rest period in seconds. Defaults to 2.
+    onset_duration : int 
+        Duration of motion period in seconds. Defaults to 4.
+    release_duration : int 
+        Duration of release period in seconds. Defaults to 2.
+    trim_duration : int
+        Duration of collecting trach data in seconds. Default 3.
+    """
     def __init__(self, 
                  num_epochs: int, 
                  rest_duration: int = 2, 
-                 onset_duration: int = 3, 
+                 onset_duration: int = 4, 
                  release_duration: int = 2,
                  trim_duration : int = 3):
         
-        base_path = Path(__file__).resolve().parent  # folder where this script lives
-        beep_folder = str(base_path) + r"\beep_sounds"
+        # base_path = Path(__file__).resolve().parent  # folder where this script lives
+        # beep_folder = str(base_path) + r"\beep_sounds"
 
-        self.ONSET_beep = beep_folder + r"\START.mp3"
-        self.REL_beep = beep_folder + r"\RELEASE.mp3"
+        # self.ONSET_beep = beep_folder + r"\START.mp3"
+        # self.REL_beep = beep_folder + r"\RELEASE.mp3"
 
         self.REST_ID = 10
         self.ONSET_ID = 20
         self.REL_ID = 30
-        self.END_ID = 40
-        self.TRIM_ID = 111
+        self.ST_TRIM_ID = 111
+        self.END_TRIM_ID = 222
 
         self.num_epochs = num_epochs
         self.t_rest = rest_duration
@@ -32,7 +47,11 @@ class PROTOCOL_con():
         self.t_rel = release_duration
         self.t_trim = trim_duration
 
-    def start(self, q_PRO : JoinableQueue,
+        self.cmd_switch_text = 'switch_to_text'
+        self.cmd_switch_video = 'switch_to_video'
+
+    def start(self, 
+               q_PRO : JoinableQueue,
                q_ICOM_PRO : JoinableQueue, 
                q_RCOM_PRO : JoinableQueue, 
                barrier_exec : Barrier):
@@ -56,10 +75,11 @@ class PROTOCOL_con():
                         self.create_file_header(filepath = filepath_PRO)
                         file_handle = open(filepath_PRO, 'a', buffering = 1, newline = '')
                         
-                        # print("PROTOCOL - [WAIT] WAITING for other processes. Dummy method.\n Begin in...")
-                        # for i in range(7):
-                        #     print(f'MVC protocol starts in {7-i}', end='\r')
-                        #     time.sleep(1)
+                        for i in range(3):
+                            payload = f'Begins in {3-i}'
+                            cmd = self.cmd_switch_text
+                            q_RCOM_PRO.put((cmd, payload))
+                            time.sleep(1)
                         
                         barrier_exec.wait()
                         print('ALL - Barriers are reached')
@@ -67,8 +87,10 @@ class PROTOCOL_con():
                         t0 = time.perf_counter_ns()
                         print(f'PROTOCOL - begin at time: {t0 / 1e9}')
                         
+                        q_RCOM_PRO.put((self.cmd_switch_text, 'REST YOUR HAND'))
                         self.execute_trim_period(t0 = t0, file_handler = file_handle)
                         execute_flag = True
+                        q_RCOM_PRO.put(self.cmd_switch_video)
 
                     case 'stop':
                         if not execute_flag:    # Break out of system, if 'record' never have been called
@@ -81,8 +103,10 @@ class PROTOCOL_con():
                 epoch_idx += 1
 
             if finish:
+                q_RCOM_PRO.put((self.cmd_switch_text, 'GREAT JOB!'))
                 self.execute_trim_period(t0 = t0, file_handler = file_handle)
                 execute_flag, finish = False, False
+                q_RCOM_PRO.put('terminate')         # Terminate the gui
                 if file_handle:
                     file_handle.close()
                     file_handle = None
@@ -137,10 +161,10 @@ class PROTOCOL_con():
         print('PROTOCOL - execute_trim_period func')
         current_time = time.perf_counter_ns()
 
-        self.log_marker(file_handler, self.diff(t0, current_time), marker_id = self.TRIM_ID, description = "Trash data in the TRIM period")
+        self.log_marker(file_handler, self.diff(t0, current_time), marker_id = self.ST_TRIM_ID, description = "Trash data in the TRIM period")
         wait_for = self.at(current_time, self.t_trim)
         self.wait_until(wait_for)
-        self.log_marker(file_handler, self.diff(t0, wait_for), marker_id = self.TRIM_ID, description = "Trash data in the TRIM period")
+        self.log_marker(file_handler, self.diff(t0, wait_for), marker_id = self.END_TRIM_ID, description = "Trash data in the TRIM period")
 
     def create_file_header(self, filepath):
         # if file doesn't exist, write header
