@@ -27,17 +27,17 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "data_fusion_simplifier"                 # Name of the subject : subject 0, subject 1
+SUBJECT_NAME = "subject0"                 # Name of the subject : subject 0, subject 1
 FINGER_NAME = 'flex_index_finger'                       # Name of the data file
-NUM_EPOCHS = 1                                         # Number of epochs per experiment
+NUM_EPOCHS = 30                                         # Number of epochs per experiment
 REST_DURATION = 2                                       # Rest duration (sec) during 1 trial
-ONSET_DURATION = 3                                      # ONSET duration (sec) during 1 trial
+ONSET_DURATION = 4                                      # ONSET duration (sec) during 1 trial
 REL_DURATION = 2                                        # Release duration (sec) during 1 trial
 TRIM_DURATION = 3                                       # Trim duration (sec) in the beginning and end of experiment
 MC_PORT = 'COM8'                                        # Define MC port
 EEG_PORT = 'COM9'                                       # Define EEG port
-EMG_SELECT_SENSORS = (0, 2)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
-EMG_SAMPLES_PER_READ = 1000                             # Samples per read for the EMG sensors
+EMG_SELECT_SENSORS = (3, 5)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
+EMG_SAMPLES_PER_READ = 500                             # Samples per read for the EMG sensors
 MODES = {
     "MC _ _":    ["MC", "PRO"],
     "MC EEG _":  ["MC", "EEG", "PRO"],
@@ -57,30 +57,29 @@ MODES = {
 * Remember to check when processes start and it might need to be shifted
 '''
 
-def MC_start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_init, barrier_execute):
+def MC_start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_init, barrier_execute, stream_on_event):
     mc_ins = MC.Ada_con(co_mod = 0, re_only = False, devicename = MC_PORT)  # linux: '/dev/ttyUSB0', windows: 'COM3'
     barrier_init.wait()
     print('MC - Starting process.')
-    mc_ins.start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_execute)
+    mc_ins.start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_execute, stream_on_event)
     mc_ins.close()
 
-def EEG_start(q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_init, barrier_execute):
+def EEG_start(q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_init, barrier_execute, stream_on_event):
     eeg_ins = EEG(serial_port = EEG_PORT)  # BEWARE OF SERIAL_PORT
     barrier_init.wait()
     print('EEG - Starting process.')
-    eeg_ins.start(q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_execute)
+    eeg_ins.start(q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_execute, stream_on_event)
 
-def EMG_start(q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_init, barrier_execute):
+def EMG_start(q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_init, barrier_execute, stream_on_event):
     emg_ins = EMG(select_sensors = EMG_SELECT_SENSORS, samples_per_read = EMG_SAMPLES_PER_READ, units = 'mV')
     barrier_init.wait()
     print('EMG - Starting process.')
-    emg_ins.start(q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_execute)
+    emg_ins.start(q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_execute, stream_on_event)
 
 def GUI_start(q_r_PRO : JoinableQueue, which_finger : str, barrier_init : Any | None):
     run_gui(event_queue = q_r_PRO, which_finger = which_finger, barrier_init = barrier_init)
-    print('GUI - Starting process.')
 
-def PROTOCOL_start(q_PRO, q_i_PRO, q_r_PRO, barrier_init, barrier_execute, shutdown_event):
+def PROTOCOL_start(q_PRO, q_i_PRO, q_r_PRO, barrier_init, barrier_execute, shutdown_event, stream_on_event):
     protocol_ins = PROTOCOL(num_epochs = NUM_EPOCHS,
                             rest_duration = REST_DURATION,
                             onset_duration = ONSET_DURATION,
@@ -88,7 +87,7 @@ def PROTOCOL_start(q_PRO, q_i_PRO, q_r_PRO, barrier_init, barrier_execute, shutd
                             trim_duration = TRIM_DURATION)
     barrier_init.wait()
     print('PROTOCOL - Starting process.')
-    protocol_ins.start(q_PRO, q_i_PRO, q_r_PRO, barrier_execute)
+    protocol_ins.start(q_PRO, q_i_PRO, q_r_PRO, barrier_execute, stream_on_event)
     
     shutdown_event.set()        # Set shutdown_event to terminate all processes
 
@@ -165,6 +164,36 @@ def listen_for_terminal_input(q_i_MC : Optional[JoinableQueue],
         instructions = [('stop', None)] * 4
         send_command_queue(q_i_MC, q_i_EEG, q_i_EMG, q_i_PRO, instructions, select_method)
 
+def check_sensor_status(q_r_EEG : JoinableQueue,
+                        q_r_EMG : JoinableQueue,
+                        stream_on_event : Any):
+    
+    EEG_ready = False
+    EMG_ready = False
+    while not stream_on_event.is_set():
+        msg = 'False'
+
+        if not EEG_ready and not q_r_EEG.empty():
+            msg = q_r_EEG.get()
+
+            if msg == 'True':
+                EEG_ready = True
+                print('EEG_ready = True')
+        
+        elif not EMG_ready and not q_r_EMG.empty():
+            msg = q_r_EMG.get()
+
+            if msg == 'True':
+                EMG_ready = True
+                print('EMG_ready = True')
+        
+        if EEG_ready and EMG_ready:
+            stream_on_event.set()
+    
+    print('Exit - check_sensor_status')
+
+
+
 def build_system(active_modes : Dict):
     """
     Build queues, processes, and barriers corresponding to the number of active processes.
@@ -201,6 +230,7 @@ def build_system(active_modes : Dict):
     num_modes = len(active_modes)
     barrier_init = Barrier(num_modes + 2)     # Purpose: To hold processes until all is initilized + listen_for_terminal_input Thread and GUI_START Process
     barrier_exec = Barrier(num_modes)         # Purpose: To hold processes to insure all is syncronized
+    stream_on_event = Event()
 
     for key in active_modes:
         # Queues for inter-process communications
@@ -212,17 +242,17 @@ def build_system(active_modes : Dict):
 
         if key == 'PRO':
             shutdown_event = Event()                # Purpose: Whenever protocol terminates, set this true and it will terminate all processes
-            args = (q_main, q_i, q_r, barrier_init, barrier_exec, shutdown_event)
+            args = (q_main, q_i, q_r, barrier_init, barrier_exec, shutdown_event, stream_on_event)
         else:
-            args = (q_main, q_i, q_r, barrier_init, barrier_exec)
+            args = (q_main, q_i, q_r, barrier_init, barrier_exec, stream_on_event)
 
         process_temp = Process(
-            target = OWN_PROCESS[key].start_func,
+            target = OWN_PROCESSES[key].start_func,
             args = args
         )
         processes.append(process_temp)
     
-    return queues, processes, barrier_init, shutdown_event
+    return queues, processes, barrier_init, shutdown_event, stream_on_event
 
 
 def main():
@@ -231,7 +261,7 @@ def main():
 
     active = MODES[METHOD]             # Extract the mode from the desired argument
 
-    queues, processes, barrier_init, shutdown_event  = build_system(active, which_finger = FINGER_NAME)
+    queues, processes, barrier_init, shutdown_event, stream_on_event  = build_system(active)
 
     # What is [1] -> Get the q_i for each process.
     # If a process is not active, default set value (q_main, q_i, q_r) to None 
@@ -239,15 +269,24 @@ def main():
     q_EEG = queues.get('EEG', (None, None, None))[1]
     q_EMG = queues.get('EMG', (None, None, None))[1]
     q_PRO = queues.get('PRO', (None, None, None))[1]
-    q_PRO_r = queues.get('PRO', (None, None, None))[2]
+    
+    q_r_EEG = queues.get('EEG', (None, None, None))[2]
+    q_r_EMG = queues.get('EMG', (None, None, None))[2]
+    q_r_PRO = queues.get('PRO', (None, None, None))[2]
     
     # Initilize gui process separatly, because it does not need queues.
     # It require to receive protocol messenges 
-    gui_process = Process(target = GUI_start, args = (q_PRO_r, FINGER_NAME, barrier_init))
+    gui_process = Process(target = GUI_start, args = (q_r_PRO, FINGER_NAME, barrier_init))
 
     terminal = threading.Thread(
         target = listen_for_terminal_input,
         args = (q_MC, q_EEG, q_EMG, q_PRO, barrier_init, METHOD, shutdown_event),
+        daemon = True
+    )
+
+    start_streaming = threading.Thread(
+        target = check_sensor_status,
+        args = (q_r_EEG, q_r_EMG, stream_on_event),
         daemon = True
     )
 
@@ -256,6 +295,7 @@ def main():
         p.start()
 
     terminal.start()
+    start_streaming.start()
 
 if __name__ == '__main__':
     main()

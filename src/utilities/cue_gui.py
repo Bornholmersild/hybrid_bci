@@ -38,9 +38,9 @@ class CueWindow(QWidget):
 
         # Window setup
         self.setWindowTitle('Experiment Cues')          # Name of the window
-        self.setFixedSize(1000, 700)                    # Set window size
+        #self.setFixedSize(1000, 700)                    # Set window size
         self.center_stack = QStackedWidget(self)        # Allow for stackable widgets
-        #self.showFullScreen()
+        self.showFullScreen()
 
         #==============#
         # Video Widget #
@@ -198,7 +198,8 @@ def run_gui(event_queue: Queue, which_finger : str, barrier_init : Any | None):
 
     if barrier_init is not None:    # Avoid break if barrier_init is of None type
         barrier_init.wait()
-
+    print('GUI - Starting process.')
+    
     sys.exit(app.exec_())
 
 def show_finger_motion():
@@ -214,7 +215,7 @@ def show_finger_motion():
     cmd_switch_text = 'switch_to_text'
     cmd_switch_video = 'switch_to_video'
     states = [('rest', 2), ('contract', 4), ('release', 2)]
-    EPOCHS = 3
+    EPOCHS = 2
     TIMEOUT = 3
     time.sleep(TIMEOUT + 3)               # Prepare the gui/video before sending messages
 

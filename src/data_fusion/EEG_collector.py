@@ -39,7 +39,7 @@ class EEG_con():
             np.savetxt(f, np.array([sensor_headers]),
                     delimiter=',', fmt='%s')
 
-    def start(self, q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_exec):
+    def start(self, q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_exec, stream_on_event):
         '''
         Calling this method listens for queue instructions and acts accordingly.
         Instructions:
@@ -62,10 +62,20 @@ class EEG_con():
 
                         print('EEG - Waiting for barrier')
                         barrier_exec.wait()
-                        # MAYBE MOVE START_STREAM BEFORE WAIT IN BOTH EEG AND EMG and SET A TIMER FOR PROTOCOL
+                        
+                        exit_while = False
                         self.board.start_stream()
+                        while not stream_on_event.is_set():
+                            self.board.get_board_data()     # Flush ring buffer
+                            if not exit_while:
+                                q_RCOM_EEG.put('True')
+                                exit_while = True
+                            stream_on_event.wait(timeout=0.01)
+
+                        
+                        print('EEG EXIT stream_on_event')
                         self.board.get_board_data()     # Flush ring buffer
-                        print(f'EEG - Time after flush: {time.perf_counter_ns() / 1e9}')
+                        print(f'EEG - Start stream: {time.time()}')
                         
                     case "stop":
                         print('EEG - Stopping EEG recording')

@@ -1,5 +1,4 @@
 import time
-from playsound3 import playsound
 import numpy as np
 from multiprocessing.synchronize import Barrier  # Import the proper Barrier type
 from multiprocessing import JoinableQueue
@@ -54,7 +53,8 @@ class PROTOCOL_con():
                q_PRO : JoinableQueue,
                q_ICOM_PRO : JoinableQueue, 
                q_RCOM_PRO : JoinableQueue, 
-               barrier_exec : Barrier):
+               barrier_exec : Barrier,
+               stream_on_event):
         '''
         Calling this method listens for queue instructions and acts accordingly.
         '''
@@ -84,8 +84,10 @@ class PROTOCOL_con():
                         barrier_exec.wait()
                         print('ALL - Barriers are reached')
 
+                        stream_on_event.wait()
+                        
                         t0 = time.perf_counter_ns()
-                        print(f'PROTOCOL - begin at time: {t0 / 1e9}')
+                        print(f'PROTOCOL - begin at time: {time.time()}')
                         
                         q_RCOM_PRO.put((self.cmd_switch_text, 'REST YOUR HAND'))
                         self.execute_trim_period(t0 = t0, file_handler = file_handle)
@@ -99,7 +101,7 @@ class PROTOCOL_con():
                         finish = True           # Finish the experiment with trim period
             
             if execute_flag:
-                finish = self.execute_protocol(t0 = t0, epoch_idx = epoch_idx, file_handler = file_handle)
+                finish = self.execute_protocol(t0 = t0, epoch_idx = epoch_idx, file_handler = file_handle, q_RCOM_PRO = q_RCOM_PRO)
                 epoch_idx += 1
 
             if finish:
@@ -115,7 +117,8 @@ class PROTOCOL_con():
     def execute_protocol(self, 
                          t0 : int,
                          epoch_idx : int,
-                         file_handler):
+                         file_handler,
+                         q_RCOM_PRO : JoinableQueue):
         """Execute the experimental protocol.
         
         Args:
@@ -126,6 +129,7 @@ class PROTOCOL_con():
             filepath (str, optional): Path to save markers. Defaults to None.
             barrier (multiprocessing.Barrier, optional): Synchronization barrier. Defaults to None.
         """
+        q_RCOM_PRO.put('rest')
         print('REST')
         t_epoch = time.perf_counter_ns()
 
@@ -135,14 +139,14 @@ class PROTOCOL_con():
         self.wait_until(t_wait)
 
         # Execute the action
-        playsound(self.ONSET_beep, block=False)
+        q_RCOM_PRO.put('contract')
         print('Contract')
         self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.ONSET_ID, description = "Action period started")
         t_wait = self.at(t_epoch, self.t_rest + self.t_onset)
         self.wait_until(t_wait)
 
         # Release period
-        playsound(self.REL_beep, block=False)
+        q_RCOM_PRO.put('release')
         print('RELEASE')
         self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.REL_ID, description = "Rest period started")
         t_wait = self.at(t_epoch, self.t_rest + self.t_onset + self.t_rel)

@@ -91,6 +91,8 @@ class Filtering:
         rts = []
         mean = np.mean(data, axis=0, keepdims=False)
         std  = np.std(data, axis=0, keepdims=False)
+        print(f'Mean per channel: {mean}')
+        print(f'STD per channel: {std}')
 
             
         if len(data.shape) == 1:
@@ -158,7 +160,7 @@ class EEG_preprocessing(Filtering):
         # --------------------------------------------------
 
         EEG_filter_ins = Filtering(fs = self.fs)
-        
+
         EEG_notch = {}
         EEG_bandpass = {}
         sos = {}
@@ -179,7 +181,7 @@ class EEG_preprocessing(Filtering):
         for finger_movement in EEG_raw.keys():
             total_time = num_epochs * trial_period                                # total time in seconds.
             real_fs = len(EEG_bandpass[finger_movement]) / (total_time)           # Real frequency
-            target_len = int( len(EEG_bandpass[finger_movement])  * (self.fs / real_fs) )            # The correct number of samples for desired frequency
+            target_len = int( len(EEG_bandpass[finger_movement])  * (self.fs / real_fs) )        # The correct number of samples for desired frequency
             
 
             EEG_resampled[finger_movement] = resample(EEG_bandpass[finger_movement], target_len, axis=0)
@@ -188,7 +190,7 @@ class EEG_preprocessing(Filtering):
             print(f'Total Time {total_time}\n Real fs: {real_fs} Hz\n Target len: {target_len}\n Original len: {len(EEG_bandpass[finger_movement])}')
 
             EEG_norm[finger_movement] = EEG_filter_ins.zscore_within_channel(EEG_resampled[finger_movement])
-        
+            
             # EPOCHS
             EEG_samples_per_epoch = EEG_norm[finger_movement].shape[0] // num_epochs      
 
@@ -319,7 +321,7 @@ class EMG_preprocessing(Filtering):
                                 bandpass_highcut = 450,
                                 num_channels = 3,
                                 num_epochs = 30,
-                                trial_period = 9,
+                                trial_period = 8,
                                 sample_window = 200,
                                 window_stepsize = 50):
         '''
@@ -360,6 +362,7 @@ class EMG_preprocessing(Filtering):
             EMG_notch[f] = EMG_filter_ins.notch(EMG_raw[f], cutoff=50, Q=30)
             EMG_bandpass[f], sos[f] = EMG_filter_ins.butter_bandpass(EMG_notch[f], lowcut=bandpass_lowcut, highcut=bandpass_highcut, order=4)
 
+
         # --------------------------------------------------
         # 2) RESAMPLE + EPOCH
         # --------------------------------------------------
@@ -392,7 +395,7 @@ class EMG_preprocessing(Filtering):
                 f'Ceil fs: {ceil_fs} Hz\n'
                 f'Target len: {target_len}\n'
                 f'RMS len before resample: {rms_temp[f_key].shape}\n'
-                f'EMG original len: {len(EMG_bandpass[f_key])}')
+                f'EMG original len: {len(EMG_bandpass[f_key])}\n')
             print(f'RMS resample shape: {RMS[f_key].shape}\n'
                 f'RMS epoch shape: {RMS_epoch[f_key].shape}\n'
                 f'RMS mean epoch shape: {RMS_epoch_mean[f_key].shape}\n')
@@ -405,7 +408,7 @@ class EMG_preprocessing(Filtering):
                               bandpass_highcut = 450,
                               num_channels = 3,
                               num_epochs = 30,
-                              trial_period = 9):
+                              trial_period = 8):
         '''
         Performs the full preprocessing routine:
         1) Notch + Bandpass filter
@@ -437,6 +440,10 @@ class EMG_preprocessing(Filtering):
         EMG_notch = {}
         EMG_bandpass = {}
         sos = {}
+        
+        # 2000 * 30 * 8 = 480000
+        # Trim 6 seconds = 12000 samples
+        # 468000 samples remain 
 
         for f in EMG_raw.keys():
             EMG_notch[f] = EMG_filter_ins.notch(EMG_raw[f], cutoff=50, Q=30)
@@ -467,7 +474,7 @@ class EMG_preprocessing(Filtering):
             print(f'Total Time {total_time} s\n'
                 f'Real fs: {real_fs} Hz\n'
                 f'Target len: {target_len}\n'
-                f'EMG original len: {len(EMG_bandpass[f_key])}')
+                f'EMG original len: {len(EMG_bandpass[f_key])}\n')
             print(f'EMG resample shape: {EMG[f_key].shape}\n'
                 f'EMG epoch shape: {EMG_epoch[f_key].shape}\n'
                 f'EMG mean epoch shape: {EMG_epoch_mean[f_key].shape}\n')

@@ -1,0 +1,91 @@
+{
+  "Subject1": {
+    "timestamp": "2026-01-13",
+    "name": "Nicklas Grønvall",
+    "gender": "Male",
+    "age": 27,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right"
+  },
+
+  "Subject2": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  },
+
+    "Subject3": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  },
+
+    "Subject4": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  },
+
+    "Subject5": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  },
+
+    "Subject6": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  },
+
+    "Subject7": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  },
+
+    "Subject8": {
+    "timestamp": "X",
+    "name": "X",
+    "gender": "X",
+    "age": 0,
+    "neurological_disorder": "Parkinson",
+    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
+    "hand_arm_injury": "what",
+    "dominant_hand": "X"
+  }
+  
+  
+}

@@ -25,7 +25,7 @@ class plot_toolbox():
         """
 
         for _, row in enumerate(marker_file.values):
-            t = row[0]
+            t = row[0] - 3
             marker = row[1]
             desc = {
                 10 : 'rest',
@@ -33,6 +33,9 @@ class plot_toolbox():
                 30 : 'release',
                 0  : 'end'
                 }
+            
+            if marker not in desc:
+                continue
 
             # vertical line
             plt_axis.axvline(x=t, color='salmon', linestyle='--', alpha=0.5)
@@ -91,31 +94,35 @@ class visualize_EEG(plot_toolbox):
         ymax = np.max(eeg)
         ymin = np.min(eeg)
 
-        rows = int(np.ceil(n_ch / 2))
-        fig, axs = plt.subplots(rows, 2, figsize=(6, 2.5*rows), dpi=150)
+        rows = 4
+        select_ch = 0
+        for _ in range(rows):
+            fig, axs = plt.subplots(rows, 1, figsize=(3, 2.5*rows), dpi=150)
 
-        time = np.arange(n_samp_emg) / self.fs
+            time = np.arange(n_samp_emg) / self.fs
 
-        for ch in range(n_ch):
-            row = ch % rows
-            col = ch // rows
-            ax = axs[row, col]
-            EEG = eeg[:, ch]
+            for ch in range(rows):
+                #row = ch % rows
+                #col = ch // rows
+                ax = axs[ch]
+                EEG = eeg[:, select_ch]
 
-            ax.plot(time, EEG, label = self.eeg_ch_names[ch])
+                ax.plot(time, EEG, label = self.eeg_ch_names[select_ch])
 
-            ax.set_ylim([ymin, ymax])
-            ax.set_xticks(np.arange(0, time[-1]+1, self.tp//3))
+                ax.set_ylim([ymin, ymax])
+                ax.set_xticks(np.arange(0, time[-1]+1, self.tp//3))
 
-            ax.set_xlabel('Time (s)')
-            ax.set_ylabel('EEG')
-            ax.legend(loc = 'lower left')
+                ax.set_xlabel('Time (s)')
+                ax.set_ylabel('EEG')
+                ax.legend(loc = 'lower left')
 
-            if isinstance(markers, pd.DataFrame):
-                self.toolbox_ins.add_markers_to_plot(plt_axis = ax, marker_file = markers, stop_markers_at = stop_marker)
+                if isinstance(markers, pd.DataFrame):
+                    self.toolbox_ins.add_markers_to_plot(plt_axis = ax, marker_file = markers, stop_markers_at = stop_marker)
 
-        fig.tight_layout()
-        plt.show() 
+                select_ch += 1
+                
+            fig.tight_layout()
+            plt.show() 
 
 class visualize_EMG():
     def __init__(self, fs = 2000, rms_sampling_window = 200, rms_windows_stepsize = 50, which_finger = 'index', num_epochs = 32, trial_period = 9):
@@ -145,6 +152,9 @@ class visualize_EMG():
         :param pd.DataFrame markers: Provide markers file to display marker or provide a int for disable markers insert
         :param list display_window: Provide a list of two ints [start, end] in secounds to display period of the sequential data and leave as int to display all
         '''
+        # Put ymax and ymin window for the whole dataset
+        ymax = np.max(rms)
+        ymin = np.min(rms)
         if isinstance(emg, dict) or isinstance(rms, dict):
             raise TypeError('Specify which finger with an np.array object')
         if isinstance(display_window, list):
@@ -162,8 +172,7 @@ class visualize_EMG():
         # Size of the data
         n_samp_emg, n_ch = emg.shape
         n_samp_rms, _ = rms.shape
-        ymax = np.max(emg)
-        ymin = np.min(emg)
+        # PUT ymax and ymin calculation here to reflect the display window only
 
         fig, axs = plt.subplots(n_ch, 1)
 
@@ -171,11 +180,11 @@ class visualize_EMG():
         win_time = (np.arange(n_samp_rms) * (self.rws) + self.rws) / self.fs
         
         for ch in range(n_ch):
-            EMG = emg[:, ch]
+            # EMG = emg[:, ch]
             RMS = rms[:, ch]
             ax = axs[ch]
 
-            ax.plot(time, EMG, label = self.key)
+            # ax.plot(time, EMG, label = self.key)
             ax.plot(win_time, RMS, label = 'RMS envelope')
 
             ax.set_ylim([ymin, ymax])
@@ -195,21 +204,43 @@ class visualize_EMG():
 def load_multi_csv(csv_files, data_type=None, which_motion = 'flex'):
     dfs = []
     for f in csv_files:
+        print('again')
         # Extract finger name only
         match = re.search(fr'{which_motion}_(.*?)_finger_', f.stem)
         finger = match.group(1) if match else 'unknown'                
 
         if data_type == 'EEG':
             df = pd.read_csv(f, delimiter=',')
+            df = trim_dataset_edges(data = df, fs = 125, trim_start_sec = 3, trim_end_sec = 3)
+        elif data_type == 'EMG':
+            df = pd.read_csv(f)
+            df = trim_dataset_edges(data = df, fs = 2000, trim_start_sec = 3, trim_end_sec = 3)
         else:
             df = pd.read_csv(f)
         
-        df['finger'] = finger
+        print(df.shape)
+        df.loc[:, 'finger'] = finger
         dfs.append(df)
 
     return pd.concat(dfs, ignore_index=True)
 
-def main():
+def trim_dataset_edges(data: pd.DataFrame, fs: int, trim_start_sec: int, trim_end_sec: int) -> pd.DataFrame:
+    """
+    Trims the start and end of the dataset by specified seconds.
+
+    :param data: Input data array of shape (samples, channels)
+    :param fs: Sampling frequency in Hz
+    :param trim_start_sec: Seconds to trim from the start
+    :param trim_end_sec: Seconds to trim from the end
+    :return: Trimmed data array
+    """
+    desired_data_length = fs * 30 * 8  # 30 seconds * 8 trials
+    start_index = trim_start_sec * fs
+    end_index = desired_data_length + start_index
+    print(start_index, end_index, data.shape)
+    return data.iloc[start_index:end_index].copy()
+
+def test_trim():
     #-----------#
     # Constants #
     #-----------#
@@ -221,11 +252,11 @@ def main():
     EEG_LOWCUT = 2
     EEG_HIGHCUT = 32
 
-    EMG_NUM_CH = 2
+    EMG_NUM_CH = 3
     EEG_NUM_CH = 16
 
-    NUM_EPOCHS = 10
-    TRIAL_PERIOD = 9
+    NUM_EPOCHS = 90
+    TRIAL_PERIOD = 8
 
     RMS_SAMPLING_WINDOW = 200
     RMS_WINDOW_STEPSIZE = 50
@@ -233,7 +264,7 @@ def main():
     #------------------------#
     # Select what to inspect #
     #------------------------#
-    choise_subject_file = 'Nicklas_basic_movement'           # Lies in experiment\data\...
+    choise_subject_file = 'subject0'           # Lies in experiment\data\...
     which_motion = 'flex'           # flex, con or * for all
     which_finger = 'index'          # thumb, index, middle, ring, little, or * for all
 
@@ -246,23 +277,62 @@ def main():
     EMG_data_dir = Path(f'{DATA_DIR}/{choise_subject_file}/EMG')
     csv_files = list(EMG_data_dir.glob(SF))          # Find path to all files of this name
     EMG_raw_df = load_multi_csv(csv_files)
+
+    print(EMG_raw_df.shape)
+def main():
+    #-----------#
+    # Constants #
+    #-----------#
+    EMG_FREQ = 2000
+    EEG_FREQ = 125
+    
+    EMG_LOWCUT = 20
+    EMG_HIGHCUT = 450
+    EEG_LOWCUT = 2
+    EEG_HIGHCUT = 32
+
+    EMG_NUM_CH = 3
+    EEG_NUM_CH = 16
+
+    NUM_EPOCHS = 30
+    TRIAL_PERIOD = 8
+
+    RMS_SAMPLING_WINDOW = 200
+    RMS_WINDOW_STEPSIZE = 50
+
+    #------------------------#
+    # Select what to inspect #
+    #------------------------#
+    choise_subject_file = 'subject_0'           # Lies in experiment\data\...
+    which_motion = 'flex'           # flex, con or * for all
+    which_finger = 'index'          # thumb, index, middle, ring, little, or * for all
+
+    DATA_DIR = str(Path().resolve()) + '/src/experiment/data'       # Path to data
+    SF = f'{which_motion}_{which_finger}_finger_*.csv'              # What to look for
+
+    #-----------#
+    # Load data #
+    #-----------#
+    EMG_data_dir = Path(f'{DATA_DIR}/{choise_subject_file}/EMG')
+    csv_files = list(EMG_data_dir.glob(SF))          # Find path to all files of this name
+    # EMG_raw_df = load_multi_csv(csv_files, data_type='EMG', which_motion=which_motion)
     
     EEG_data_dir = Path(f'{DATA_DIR}/{choise_subject_file}/EEG')
     csv_files = list(EEG_data_dir.glob(SF))          # Find path to all files of this name
-    EEG_raw_df = load_multi_csv(csv_files, data_type='EEG')
+    EEG_raw_df = load_multi_csv(csv_files, data_type='EEG', which_motion = which_motion)
 
     # For markers
     markers_data_dir = Path(f'{DATA_DIR}/{choise_subject_file}/Markers')
     csv_files = list(markers_data_dir.glob(SF))          # Find path to all files of this name
-    markers_df = load_multi_csv(csv_files)
+    markers_df = load_multi_csv(csv_files, data_type='Markers', which_motion = which_motion)
 
     #---------------------------#
     # Extract the data channels #
     #---------------------------#
-    EMG_raw = {
-        f: EMG_raw_df.loc[EMG_raw_df['finger'] == f, EMG_raw_df.columns.str.startswith('ch')].to_numpy()
-        for f in EMG_raw_df['finger'].unique()
-    }
+    # EMG_raw = {
+    #     f: EMG_raw_df.loc[EMG_raw_df['finger'] == f, EMG_raw_df.columns.str.startswith('ch')].to_numpy()
+    #     for f in EMG_raw_df['finger'].unique()
+    # }
 
     EEG_raw = {
         f: EEG_raw_df.loc[EEG_raw_df['finger'] == f, EEG_raw_df.columns.str.startswith(' EXG')].to_numpy()
@@ -274,27 +344,29 @@ def main():
         for f in EEG_raw_df['finger'].unique()
     }
 
+    EEG_raw = EEG_raw[which_finger][60000:, :].copy()
     #------------------------------------#
     # Perform data preprocessing routine #
     #------------------------------------#
     EMG_pre_ins = EMG_preprocessing(fs = EMG_FREQ)
     EEG_pre_ins = EEG_preprocessing(fs = EEG_FREQ)
 
-    RMS, RMS_epoch, RMS_epoch_mean = EMG_pre_ins.preprocessing_routine_rms(raw_emg = EMG_raw,
-                                                                        bandpass_lowcut = EMG_LOWCUT,
-                                                                        bandpass_highcut = EMG_HIGHCUT,
-                                                                        num_channels = EMG_NUM_CH,
-                                                                        num_epochs = NUM_EPOCHS,
-                                                                        trial_period = TRIAL_PERIOD,
-                                                                        sample_window = RMS_SAMPLING_WINDOW,
-                                                                        window_stepsize = RMS_WINDOW_STEPSIZE)
+    # RMS, RMS_epoch, RMS_epoch_mean = EMG_pre_ins.preprocessing_routine_rms(raw_emg = EMG_raw,
+    #                                                                     bandpass_lowcut = EMG_LOWCUT,
+    #                                                                     bandpass_highcut = EMG_HIGHCUT,
+    #                                                                     num_channels = EMG_NUM_CH,
+    #                                                                     num_epochs = NUM_EPOCHS,
+    #                                                                     trial_period = TRIAL_PERIOD,
+    #                                                                     sample_window = RMS_SAMPLING_WINDOW,
+    #                                                                     window_stepsize = RMS_WINDOW_STEPSIZE)
 
-    EMG, EMG_epoch, EMG_epoch_mean = EMG_pre_ins.preprocessing_routine(raw_emg = EMG_raw,
-                                                                    bandpass_lowcut = EMG_LOWCUT,
-                                                                    bandpass_highcut = EMG_HIGHCUT,
-                                                                    num_channels = EMG_NUM_CH,
-                                                                    num_epochs = NUM_EPOCHS,
-                                                                    trial_period = TRIAL_PERIOD)
+
+    # EMG, EMG_epoch, EMG_epoch_mean = EMG_pre_ins.preprocessing_routine(raw_emg = EMG_raw,
+    #                                                                 bandpass_lowcut = EMG_LOWCUT,
+    #                                                                 bandpass_highcut = EMG_HIGHCUT,
+    #                                                                 num_channels = EMG_NUM_CH,
+    #                                                                 num_epochs = NUM_EPOCHS,
+    #                                                                 trial_period = TRIAL_PERIOD)
 
     EEG, EEG_epoch, EEG_epoch_mean = EEG_pre_ins.preprocessing_routine(raw_eeg = EEG_raw,
                                                                     bandpass_lowcut = EEG_LOWCUT,
@@ -303,19 +375,22 @@ def main():
                                                                     num_epochs = NUM_EPOCHS,
                                                                     trial_period = TRIAL_PERIOD)
     
-    # Release resources
-    EMG_raw = None
-    EEG_raw = None
+    # # Release resources
+    # EMG_raw = None
+    # EEG_raw = None
 
-    #--------------------------------------#
-    # Select how data should be visualized #
-    #--------------------------------------#
-    #vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, which_finger = which_finger, num_epochs = NUM_EPOCHS, trial_period = TRIAL_PERIOD)
+    # #--------------------------------------#
+    # # Select how data should be visualized #
+    # #--------------------------------------#
+    vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, which_finger = which_finger, num_epochs = NUM_EPOCHS, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, which_finger = which_finger, num_epochs = NUM_EPOCHS, trial_period = TRIAL_PERIOD)
 
-    #vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean[which_finger], rms = RMS_epoch_mean[which_finger], markers = markers[which_finger], display_window = 0)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG[which_finger],
+    #                                      rms = RMS[which_finger],
+    #                                      markers = markers[which_finger],
+    #                                      display_window = 0)
 
-    vis_EEG_ins.plot_egg_across_channels(eeg = EEG[which_finger], markers = markers[which_finger], display_window = 0)
+    vis_EEG_ins.plot_egg_across_channels(eeg = EEG_epoch_mean['single_class'], markers = markers[which_finger], display_window = 0)
 
 if __name__ == '__main__':
     main()

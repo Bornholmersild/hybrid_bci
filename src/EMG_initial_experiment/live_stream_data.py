@@ -6,7 +6,7 @@ from scipy.signal import butter, sosfilt, iirnotch
 from math import ceil
 
 # ---------------- CONFIG ----------------
-CHANNEL_RANGE = (13, 14)       # 2 channels: 0 and 1
+CHANNEL_RANGE = (3, 5)       # 2 channels: 0 and 1
 SAMPLES_PER_READ = 200        # ~10 ms latency at 2 kHz
 FS = 2000
 WINDOW_SEC = 1
@@ -52,7 +52,7 @@ def stream_data():
         ax = axes[ch]
         line, = ax.plot(x, np.zeros(BUFFER_LEN))
         ax.set_title(f"Sensor {ch}")
-        ax.set_ylim(-0.1, 0.1)        # adjust as needed
+        ax.set_ylim(-0.5, 0.5)        # adjust as needed
         ax.set_xlim(0, WINDOW_SEC)
         lines.append(line)
     plt.show()
@@ -152,17 +152,17 @@ def stream_data_filt():
 
                 # --- 2) Optional: notch 50 Hz ---
                 # If line noise is bad, you can uncomment:
-                # from scipy.signal import lfilter
-                # y_bp = lfilter(b_notch, a_notch, y_bp)
+                from scipy.signal import lfilter
+                y_bp = lfilter(b_notch, a_notch, y_bp)
 
                 # --- 3) Rectify ---
-                # y_rect = np.abs(y_bp)
+                y_rect = np.abs(y_bp)
 
                 # --- 4) Envelope via 10 Hz low-pass ---
                 #y_env, zi_env[ch] = sosfilt(sos_env, y_rect, zi=zi_env[ch])
 
                 # Append to ring buffer (use envelope for plotting)
-                buffers[ch].extend(y_bp)
+                buffers[ch].extend(y_rect)
 
             # Update plots
             for ch in range(num_channels):
@@ -180,7 +180,8 @@ def stream_data_filt():
 
 
 if __name__ == '__main__':
-    emg = TrignoEMG((3), 200, 'mV')
+    stream_data_filt()
+
     # import socket
     # s = socket.socket()
     # try:

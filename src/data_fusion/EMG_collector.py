@@ -31,7 +31,7 @@ class EMG_con():
             #np.savetxt(f, np.array(headers), delimiter=',', fmt='%s')
             f.write(','.join(sensor_headers) + '\n')
             
-    def start(self, q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_exec):
+    def start(self, q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_exec, stream_on_event):
         
         record_flag = False
         file_handle = None
@@ -50,9 +50,17 @@ class EMG_con():
                         print("EMG - Waiting for barrier.")
                         barrier_exec.wait()
                         # MAYBE MOVE START_STREAM BEFORE WAIT IN BOTH EEG AND EMG and SET A TIMER FOR PROTOCOL
+                        exit_while = False
                         self.emg.start()
-                        self.emg.read()
-                        print(f'EMG - Time after flush: {time.perf_counter_ns() / 1e9}')
+                        while not stream_on_event.is_set():
+                            if not exit_while:
+                                q_RCOM_EMG.put('True')
+                                exit_while = True
+                            self.emg.read()
+                            stream_on_event.wait(timeout=0.01)
+
+                        #self.emg.read()
+                        print(f'EMG - Start stream: {time.time()}')
 
                         record_flag = True
 
