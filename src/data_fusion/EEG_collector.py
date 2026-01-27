@@ -13,7 +13,7 @@ barrier : Barrier for synchronization with other processes
 '''
 
 class EEG_con():
-    def __init__(self, serial_port='USB9'):        # '/dev/ttyUSB1' linux or USB_ windows
+    def __init__(self, serial_port='COM9'):        # '/dev/ttyUSB1' linux or USB_ windows
         # BrainFlow setup
         params = BrainFlowInputParams()
         params.serial_port = serial_port  # BEWARE OF SERIAL_PORT
@@ -33,13 +33,13 @@ class EEG_con():
         if os.path.exists(filepath):
             raise FileExistsError(f"File already exists: {filepath}")
 
-        sensor_headers = ['Sample_index', 'EXG Channel 0', 'EXG Channel 1', 'EXG Channel 2', 'EXG Channel 3', 'EXG Channel 4', 'EXG Channel 5', 'EXG Channel 6', 'EXG Channel 7', 'EXG Channel 8', 'EXG Channel 9', 'EXG Channel 10', 'EXG Channel 11', 'EXG Channel 12', 'EXG Channel 13', 'EXG Channel 14', 'EXG Channel 15', 'Accel Channel 0', 'Accel Channel 1', 'Accel Channel 2', 'Not Used', 'Digital Channel 0 (D11)', 'Digital Channel 1 (D12)', 'Digital Channel 2 (D13)', 'Digital Channel 3 (D17)', 'Not Used', 'Digital Channel 4 (D18)', 'Analog Channel 0', 'Analog Channel 1', 'Analog Channel 2', 'Timestamp', 'Marker Channel', 'Timestamp (Formatted)']
+        sensor_headers = ['Sample_index', 'EXG Channel 0', 'EXG Channel 1', 'EXG Channel 2', 'EXG Channel 3', 'EXG Channel 4', 'EXG Channel 5', 'EXG Channel 6', 'EXG Channel 7', 'EXG Channel 8', 'EXG Channel 9', 'EXG Channel 10', 'EXG Channel 11', 'EXG Channel 12', 'EXG Channel 13', 'EXG Channel 14', 'EXG Channel 15', 'Accel Channel 0', 'Accel Channel 1', 'Accel Channel 2', 'Not Used', 'Digital Channel 0 (D11)', 'Digital Channel 1 (D12)', 'Digital Channel 2 (D13)', 'Digital Channel 3 (D17)', 'Not Used', 'Digital Channel 4 (D18)', 'Analog Channel 0', 'Analog Channel 1', 'Analog Channel 2', 'Timestamp', 'Marker Channel']
 
         with open(filepath, 'w', newline='') as f:
             np.savetxt(f, np.array([sensor_headers]),
                     delimiter=',', fmt='%s')
 
-    def start(self, q_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_exec, stream_on_event):
+    def start(self, q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_exec, stream_on_event):
         '''
         Calling this method listens for queue instructions and acts accordingly.
         Instructions:
@@ -71,7 +71,6 @@ class EEG_con():
                                 q_RCOM_EEG.put('True')
                                 exit_while = True
                             stream_on_event.wait(timeout=0.01)
-
                         
                         print('EEG EXIT stream_on_event')
                         self.board.get_board_data()     # Flush ring buffer
@@ -83,9 +82,62 @@ class EEG_con():
                         self.board.stop_stream()
                         self.board.release_session()
 
-                        np.savetxt(filepath_EEG, data.T, delimiter=',', fmt='%.6f')
+                        with open(filepath_EEG, 'a', newline='') as f:
+                            np.savetxt(f, data.T, delimiter=',', fmt='%.6f')
                         break
-        
+            
+            if not q_log_EEG.empty():
+                log_msg = q_log_EEG.get()
+                self.board.insert_marker(log_msg)
+                print(f'EEG LOG: {log_msg}')
+
+def test_eeg_streaming():
+    params = BrainFlowInputParams()
+    params.serial_port = 'COM9'  # BEWARE OF SERIAL_PORT
+    board_id = BoardIds.CYTON_DAISY_BOARD
+    BoardShim.enable_dev_board_logger()
+    board = BoardShim(board_id, params)
+
+    board.prepare_session()
+    board.start_stream()
+    t0 = time.perf_counter_ns()
+
+    print('sleeping 3 sec')
+    board.insert_marker(101)    # start trim
+    time.sleep(3)
+    print('trim start marker insert', (time.perf_counter_ns() - t0) / 1e9)
+    board.insert_marker(102)    # end trim
+    print('trim end marker insert', (time.perf_counter_ns() - t0) / 1e9)
+
+    epoch = 50
+    for i in range(epoch):
+        print('rest')
+        board.insert_marker(10)
+        time.sleep(1)
+        print((time.perf_counter_ns() - t0) / 1e9)
+
+        print('press')
+        board.insert_marker(20)
+        time.sleep(2)
+        print((time.perf_counter_ns() - t0) / 1e9)
+
+        print('rest')
+        board.insert_marker(30)
+        time.sleep(1)
+        print((time.perf_counter_ns() - t0) / 1e9, '\n')
+
+    print('sleeping 3 sec')
+    board.insert_marker(201)    # start trim
+    time.sleep(3)
+    print((time.perf_counter_ns() - t0) / 1e9)
+    board.insert_marker(202)    # end trim
+    print((time.perf_counter_ns() - t0) / 1e9)
+
+    data = board.get_board_data().T
+    board.stop_stream()
+    board.release_session()
+    np.savetxt('test_EEG_streaming.csv', data, delimiter=',', fmt='%.6f')
+    
 if __name__ == "__main__":
-   pass
+   test_eeg_streaming()
     

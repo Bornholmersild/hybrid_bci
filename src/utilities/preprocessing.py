@@ -91,9 +91,6 @@ class Filtering:
         rts = []
         mean = np.mean(data, axis=0, keepdims=False)
         std  = np.std(data, axis=0, keepdims=False)
-        print(f'Mean per channel: {mean}')
-        print(f'STD per channel: {std}')
-
             
         if len(data.shape) == 1:
             rts.append( (data - mean) / (std + 1e-8) )

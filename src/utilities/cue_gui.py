@@ -38,9 +38,9 @@ class CueWindow(QWidget):
 
         # Window setup
         self.setWindowTitle('Experiment Cues')          # Name of the window
-        #self.setFixedSize(1000, 700)                    # Set window size
+        self.setFixedSize(1000, 700)                    # Set window size
         self.center_stack = QStackedWidget(self)        # Allow for stackable widgets
-        self.showFullScreen()
+        #self.showFullScreen()
 
         #==============#
         # Video Widget #

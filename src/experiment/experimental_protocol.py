@@ -2,7 +2,10 @@ import time
 import numpy as np
 from multiprocessing.synchronize import Barrier  # Import the proper Barrier type
 from multiprocessing import JoinableQueue
+import pygame
 import os
+from typing import Any
+#from pydub import AudioSegment         # Used to trim audio
 
 class PROTOCOL_con():
     """
@@ -28,11 +31,7 @@ class PROTOCOL_con():
                  release_duration: int = 2,
                  trim_duration : int = 3):
         
-        # base_path = Path(__file__).resolve().parent  # folder where this script lives
-        # beep_folder = str(base_path) + r"\beep_sounds"
-
-        # self.ONSET_beep = beep_folder + r"\START.mp3"
-        # self.REL_beep = beep_folder + r"\RELEASE.mp3"
+        #self.CON_SOUND, self.REL_SOUND, self.RES_SOUND = self.initialize_soundplay()
 
         self.REST_ID = 10
         self.ONSET_ID = 20
@@ -46,15 +45,17 @@ class PROTOCOL_con():
         self.t_rel = release_duration
         self.t_trim = trim_duration
 
+        # GUI IMPLEMENTAION
         self.cmd_switch_text = 'switch_to_text'
         self.cmd_switch_video = 'switch_to_video'
 
     def start(self, 
-               q_PRO : JoinableQueue,
-               q_ICOM_PRO : JoinableQueue, 
-               q_RCOM_PRO : JoinableQueue, 
-               barrier_exec : Barrier,
-               stream_on_event):
+              q_ICOM_PRO : JoinableQueue, 
+              q_RCOM_PRO : JoinableQueue, 
+              barrier_exec : Barrier,
+              stream_on_event : Any,
+              q_log_EEG : JoinableQueue,
+              q_log_EMG : JoinableQueue):
         '''
         Calling this method listens for queue instructions and acts accordingly.
         '''
@@ -63,6 +64,11 @@ class PROTOCOL_con():
         finish = False
         epoch_idx = 0
         t0 = 0
+
+        send_queues_dict = {      
+            'EEG': q_log_EEG,
+            'EMG': q_log_EMG
+        }
 
         while True:
 
@@ -75,13 +81,13 @@ class PROTOCOL_con():
                         self.create_file_header(filepath = filepath_PRO)
                         file_handle = open(filepath_PRO, 'a', buffering = 1, newline = '')
                         
-                        for i in range(3):
+                        for i in range(3):                      # Sets a timer in the gui before starting
                             payload = f'Begins in {3-i}'
                             cmd = self.cmd_switch_text
                             q_RCOM_PRO.put((cmd, payload))
                             time.sleep(1)
                         
-                        barrier_exec.wait()
+                        barrier_exec.wait()                     # Can be removed when using stream_on_event?
                         print('ALL - Barriers are reached')
 
                         stream_on_event.wait()
@@ -90,7 +96,7 @@ class PROTOCOL_con():
                         print(f'PROTOCOL - begin at time: {time.time()}')
                         
                         q_RCOM_PRO.put((self.cmd_switch_text, 'REST YOUR HAND'))
-                        self.execute_trim_period(t0 = t0, file_handler = file_handle)
+                        self.execute_trim_period(t0 = t0, file_handler = file_handle, send_queues_dict = send_queues_dict)
                         execute_flag = True
                         q_RCOM_PRO.put(self.cmd_switch_video)
 
@@ -101,12 +107,12 @@ class PROTOCOL_con():
                         finish = True           # Finish the experiment with trim period
             
             if execute_flag:
-                finish = self.execute_protocol(t0 = t0, epoch_idx = epoch_idx, file_handler = file_handle, q_RCOM_PRO = q_RCOM_PRO)
+                finish = self.execute_protocol(t0 = t0, epoch_idx = epoch_idx, file_handler = file_handle, q_RCOM_PRO = q_RCOM_PRO, send_queues_dict = send_queues_dict)
                 epoch_idx += 1
 
             if finish:
                 q_RCOM_PRO.put((self.cmd_switch_text, 'GREAT JOB!'))
-                self.execute_trim_period(t0 = t0, file_handler = file_handle)
+                self.execute_trim_period(t0 = t0, file_handler = file_handle, send_queues_dict = send_queues_dict)
                 execute_flag, finish = False, False
                 q_RCOM_PRO.put('terminate')         # Terminate the gui
                 if file_handle:
@@ -118,7 +124,8 @@ class PROTOCOL_con():
                          t0 : int,
                          epoch_idx : int,
                          file_handler,
-                         q_RCOM_PRO : JoinableQueue):
+                         q_RCOM_PRO : JoinableQueue,
+                         send_queues_dict : dict):
         """Execute the experimental protocol.
         
         Args:
@@ -134,6 +141,7 @@ class PROTOCOL_con():
         t_epoch = time.perf_counter_ns()
 
         # Rest period
+        self.put_marker_to_queue(send_queues_dict=send_queues_dict, marker_id = self.REST_ID)
         self.log_marker(file_handler, self.diff(t0, t_epoch), marker_id = self.REST_ID, description = "Rest period started")
         t_wait = self.at(t_epoch, self.t_rest)
         self.wait_until(t_wait)
@@ -141,6 +149,7 @@ class PROTOCOL_con():
         # Execute the action
         q_RCOM_PRO.put('contract')
         print('Contract')
+        self.put_marker_to_queue(send_queues_dict=send_queues_dict, marker_id = self.ONSET_ID)
         self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.ONSET_ID, description = "Action period started")
         t_wait = self.at(t_epoch, self.t_rest + self.t_onset)
         self.wait_until(t_wait)
@@ -148,7 +157,8 @@ class PROTOCOL_con():
         # Release period
         q_RCOM_PRO.put('release')
         print('RELEASE')
-        self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.REL_ID, description = "Rest period started")
+        self.put_marker_to_queue(send_queues_dict=send_queues_dict, marker_id = self.REL_ID)
+        self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.REL_ID, description = "Release period started")
         t_wait = self.at(t_epoch, self.t_rest + self.t_onset + self.t_rel)
         self.wait_until(t_wait)
 
@@ -161,14 +171,68 @@ class PROTOCOL_con():
     
     def execute_trim_period(self,
                             t0 : int,
-                            file_handler):
+                            file_handler,
+                            send_queues_dict : dict):
         print('PROTOCOL - execute_trim_period func')
         current_time = time.perf_counter_ns()
-
+        
+        self.put_marker_to_queue(send_queues_dict, self.ST_TRIM_ID)
         self.log_marker(file_handler, self.diff(t0, current_time), marker_id = self.ST_TRIM_ID, description = "Trash data in the TRIM period")
+
         wait_for = self.at(current_time, self.t_trim)
         self.wait_until(wait_for)
+
+        self.put_marker_to_queue(send_queues_dict, self.END_TRIM_ID)
         self.log_marker(file_handler, self.diff(t0, wait_for), marker_id = self.END_TRIM_ID, description = "Trash data in the TRIM period")
+
+    def initialize_soundplay(self):
+        '''
+        initialize pygame and extract sound recordings to CUE events
+
+        Returns
+        -------
+        CONTRACT_sound : pygame
+        RELASE_sound : pygame
+        REST_sound : pygame
+        '''
+        #-------------------#
+        # Extract directory #
+        #-------------------#
+        path_dir = os.path.dirname(os.path.abspath(__file__))
+        CON_dir = path_dir + "/beep_sounds" + "/CONTRACT_MOD.mp3"
+        REL_dir = path_dir + "/beep_sounds" + "/RELEASE_MOD.mp3"
+        RES_dir = path_dir + "/beep_sounds" + "/REST_MOD.mp3"
+
+        #-----------------#
+        # Initlize pygame #
+        #-----------------#
+        pygame.mixer.pre_init(
+            frequency=44100,    # 
+            size=-16,           # Bits used in the audio
+            channels=2,         # Stero
+            buffer=256          # lower buffer = lower latency - before 256
+            )
+        pygame.init()
+
+        #---------------------#
+        # Configure soundplay #
+        #---------------------#
+        CONTRACT_sound = pygame.mixer.Sound(CON_dir)
+        RELEASE_sound = pygame.mixer.Sound(REL_dir)
+        REST_sound = pygame.mixer.Sound(RES_dir)
+
+        return CONTRACT_sound, RELEASE_sound, REST_sound
+
+
+    def put_marker_to_queue(self,
+                        send_queues_dict : dict,
+                        marker_id : int):
+        '''
+        Put marker to all available queues in the send_queues_dict
+        '''
+        for key, queue in send_queues_dict.items():
+            if queue is not None:
+                queue.put( marker_id )
 
     def create_file_header(self, filepath):
         # if file doesn't exist, write header
@@ -214,6 +278,26 @@ class PROTOCOL_con():
         formatted_data = np.array([[time, marker_id, description]], dtype=str)
         np.savetxt(file_handler, formatted_data, delimiter=',', fmt='%s')
 
-
 if __name__ == "__main__":
-    pass
+    
+    
+    t0 = time.perf_counter_ns()
+    
+    #CON_SOUND.play()
+    print(((time.perf_counter_ns() - t0) / 1e9))
+    print('CONTRACT')
+    print(((time.perf_counter_ns() - t0) / 1e9))
+    time.sleep(2)
+
+    #REL_SOUND.play()
+    print(((time.perf_counter_ns() - t0) / 1e9))
+    print('RELASE')
+    print(((time.perf_counter_ns() - t0) / 1e9))
+    time.sleep(2)
+
+    #RES_SOUND.play()
+    print(((time.perf_counter_ns() - t0) / 1e9))
+    print('REST')
+    print(((time.perf_counter_ns() - t0) / 1e9))
+    time.sleep(1)
+
