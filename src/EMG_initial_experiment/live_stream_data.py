@@ -6,7 +6,7 @@ from scipy.signal import butter, sosfilt, iirnotch
 from math import ceil
 
 # ---------------- CONFIG ----------------
-CHANNEL_RANGE = (3, 5)       # 2 channels: 0 and 1
+CHANNEL_RANGE = (1, 2)       # 2 channels: 0 and 1
 SAMPLES_PER_READ = 200        # ~10 ms latency at 2 kHz
 FS = 2000
 WINDOW_SEC = 1
@@ -122,7 +122,7 @@ def stream_data_filt():
         ax = axes[ch]
         line, = ax.plot(x, np.zeros(BUFFER_LEN), lw=1)
         ax.set_title(f"Sensor {ch}")
-        ax.set_ylim(-0.1, 0.1)           # adjust after seeing real envelope ranges
+        #ax.set_ylim(-0.1, 0.1)           # adjust after seeing real envelope ranges
         ax.set_xlim(0, WINDOW_SEC)
         lines.append(line)
 

@@ -1,3 +1,5 @@
+from ..utilities import warnings_config # noqa: F401 / RUFF(F401)
+
 import time
 #import argparse
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
@@ -20,9 +22,9 @@ class EEG_con():
         board_id = BoardIds.CYTON_DAISY_BOARD
         BoardShim.enable_dev_board_logger()
         self.board = BoardShim(board_id, params)
+        self.board.prepare_session()
 
-        print("EEG - [OK] EEG collector initialized:")
-        print(f"EEG - [OK] Cyton_daisy_board sampling rate: {BoardShim.get_sampling_rate(self.board.get_board_id())}")
+        print("\nEEG - [OK] EEG collector initialized:")
 
     def insert_marker(self, board, code):
         board.insert_marker(code)
@@ -39,7 +41,7 @@ class EEG_con():
             np.savetxt(f, np.array([sensor_headers]),
                     delimiter=',', fmt='%s')
 
-    def start(self, q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_exec, stream_on_event):
+    def start(self, q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, stream_on_event):
         '''
         Calling this method listens for queue instructions and acts accordingly.
         Instructions:
@@ -48,7 +50,7 @@ class EEG_con():
             - filepath: path to save the recorded data (only for "record" command)
         '''
 
-        self.board.prepare_session()
+        protocol_never_executed = True
 
         while True:
             
@@ -59,24 +61,22 @@ class EEG_con():
                     case "record":
                         filepath_EEG = instruction[1]
                         self.create_file_header(filepath = filepath_EEG)
-
-                        print('EEG - Waiting for barrier')
-                        barrier_exec.wait()
                         
                         exit_while = False
                         self.board.start_stream()
                         while not stream_on_event.is_set():
-                            self.board.get_board_data()     # Flush ring buffer
                             if not exit_while:
                                 q_RCOM_EEG.put('True')
                                 exit_while = True
                             stream_on_event.wait(timeout=0.01)
+                            self.board.get_board_data()     # Flush ring buffer
                         
-                        print('EEG EXIT stream_on_event')
-                        self.board.get_board_data()     # Flush ring buffer
                         print(f'EEG - Start stream: {time.time()}')
+                        protocol_never_executed = False
                         
                     case "stop":
+                        if protocol_never_executed:
+                            break
                         print('EEG - Stopping EEG recording')
                         data = self.board.get_board_data()
                         self.board.stop_stream()
@@ -89,7 +89,6 @@ class EEG_con():
             if not q_log_EEG.empty():
                 log_msg = q_log_EEG.get()
                 self.board.insert_marker(log_msg)
-                print(f'EEG LOG: {log_msg}')
 
 def test_eeg_streaming():
     params = BrainFlowInputParams()

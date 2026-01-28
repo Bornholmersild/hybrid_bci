@@ -1,6 +1,5 @@
 import time
 import numpy as np
-from multiprocessing.synchronize import Barrier  # Import the proper Barrier type
 from multiprocessing import JoinableQueue
 import pygame
 import os
@@ -31,13 +30,15 @@ class PROTOCOL_con():
                  release_duration: int = 2,
                  trim_duration : int = 3):
         
-        #self.CON_SOUND, self.REL_SOUND, self.RES_SOUND = self.initialize_soundplay()
+        self.CON_SOUND, self.REL_SOUND, self.RES_SOUND = self.initialize_soundplay()
 
         self.REST_ID = 10
         self.ONSET_ID = 20
         self.REL_ID = 30
-        self.ST_TRIM_ID = 111
-        self.END_TRIM_ID = 222
+        self.FIRST_ST_TRIM_ID = 101
+        self.FIRST_END_TRIM_ID = 102
+        self.SECOND_ST_TRIM_ID = 201
+        self.SECOND_END_TRIM_ID = 202
 
         self.num_epochs = num_epochs
         self.t_rest = rest_duration
@@ -45,21 +46,16 @@ class PROTOCOL_con():
         self.t_rel = release_duration
         self.t_trim = trim_duration
 
-        # GUI IMPLEMENTAION
-        self.cmd_switch_text = 'switch_to_text'
-        self.cmd_switch_video = 'switch_to_video'
-
     def start(self, 
               q_ICOM_PRO : JoinableQueue, 
               q_RCOM_PRO : JoinableQueue, 
-              barrier_exec : Barrier,
               stream_on_event : Any,
               q_log_EEG : JoinableQueue,
               q_log_EMG : JoinableQueue):
         '''
         Calling this method listens for queue instructions and acts accordingly.
         '''
-        execute_flag = False
+        protocol_never_executed = True
         file_handle = None
         finish = False
         epoch_idx = 0
@@ -80,41 +76,27 @@ class PROTOCOL_con():
                         filepath_PRO = instruction[1]
                         self.create_file_header(filepath = filepath_PRO)
                         file_handle = open(filepath_PRO, 'a', buffering = 1, newline = '')
-                        
-                        for i in range(3):                      # Sets a timer in the gui before starting
-                            payload = f'Begins in {3-i}'
-                            cmd = self.cmd_switch_text
-                            q_RCOM_PRO.put((cmd, payload))
-                            time.sleep(1)
-                        
-                        barrier_exec.wait()                     # Can be removed when using stream_on_event?
-                        print('ALL - Barriers are reached')
-
-                        stream_on_event.wait()
+                                                
+                        stream_on_event.wait()                     # Wait untill all processes is reached and in sync
+                        print('\nALL - Barriers are reached')
                         
                         t0 = time.perf_counter_ns()
                         print(f'PROTOCOL - begin at time: {time.time()}')
                         
-                        q_RCOM_PRO.put((self.cmd_switch_text, 'REST YOUR HAND'))
-                        self.execute_trim_period(t0 = t0, file_handler = file_handle, send_queues_dict = send_queues_dict)
-                        execute_flag = True
-                        q_RCOM_PRO.put(self.cmd_switch_video)
+                        self.execute_trim_period(t0 = t0, file_handler = file_handle, send_queues_dict = send_queues_dict, protocol_never_executed = protocol_never_executed)
+                        protocol_never_executed = False
 
                     case 'stop':
-                        if not execute_flag:    # Break out of system, if 'record' never have been called
-                            break
-                        execute_flag = False    # Avoid executing the protocol 
-                        finish = True           # Finish the experiment with trim period
+                        break
             
-            if execute_flag:
-                finish = self.execute_protocol(t0 = t0, epoch_idx = epoch_idx, file_handler = file_handle, q_RCOM_PRO = q_RCOM_PRO, send_queues_dict = send_queues_dict)
+            if not protocol_never_executed:
+                finish = self.execute_protocol(t0 = t0, epoch_idx = epoch_idx, file_handler = file_handle, send_queues_dict = send_queues_dict)
                 epoch_idx += 1
 
             if finish:
-                q_RCOM_PRO.put((self.cmd_switch_text, 'GREAT JOB!'))
-                self.execute_trim_period(t0 = t0, file_handler = file_handle, send_queues_dict = send_queues_dict)
-                execute_flag, finish = False, False
-                q_RCOM_PRO.put('terminate')         # Terminate the gui
+                self.execute_trim_period(t0 = t0, file_handler = file_handle, send_queues_dict = send_queues_dict, protocol_never_executed = protocol_never_executed)
+                protocol_never_executed, finish = True, False
+
                 if file_handle:
                     file_handle.close()
                     file_handle = None
@@ -124,7 +106,6 @@ class PROTOCOL_con():
                          t0 : int,
                          epoch_idx : int,
                          file_handler,
-                         q_RCOM_PRO : JoinableQueue,
                          send_queues_dict : dict):
         """Execute the experimental protocol.
         
@@ -136,26 +117,31 @@ class PROTOCOL_con():
             filepath (str, optional): Path to save markers. Defaults to None.
             barrier (multiprocessing.Barrier, optional): Synchronization barrier. Defaults to None.
         """
-        q_RCOM_PRO.put('rest')
+        #------------#
+        # Rest event #
+        #------------#
+        self.RES_SOUND.play()
         print('REST')
         t_epoch = time.perf_counter_ns()
-
-        # Rest period
-        self.put_marker_to_queue(send_queues_dict=send_queues_dict, marker_id = self.REST_ID)
+        self.put_marker_to_queue(send_queues_dict = send_queues_dict, marker_id = self.REST_ID)
         self.log_marker(file_handler, self.diff(t0, t_epoch), marker_id = self.REST_ID, description = "Rest period started")
         t_wait = self.at(t_epoch, self.t_rest)
         self.wait_until(t_wait)
 
-        # Execute the action
-        q_RCOM_PRO.put('contract')
+        #----------------#
+        # Contract event #
+        #----------------#
+        self.CON_SOUND.play()
         print('Contract')
         self.put_marker_to_queue(send_queues_dict=send_queues_dict, marker_id = self.ONSET_ID)
         self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.ONSET_ID, description = "Action period started")
         t_wait = self.at(t_epoch, self.t_rest + self.t_onset)
         self.wait_until(t_wait)
 
-        # Release period
-        q_RCOM_PRO.put('release')
+        #---------------#
+        # Release event #
+        #---------------#
+        self.REL_SOUND.play()
         print('RELEASE')
         self.put_marker_to_queue(send_queues_dict=send_queues_dict, marker_id = self.REL_ID)
         self.log_marker(file_handler, self.diff(t0, t_wait), marker_id = self.REL_ID, description = "Release period started")
@@ -172,17 +158,23 @@ class PROTOCOL_con():
     def execute_trim_period(self,
                             t0 : int,
                             file_handler,
-                            send_queues_dict : dict):
+                            send_queues_dict : dict,
+                            protocol_never_executed : bool):
         print('PROTOCOL - execute_trim_period func')
         current_time = time.perf_counter_ns()
-        
-        self.put_marker_to_queue(send_queues_dict, self.ST_TRIM_ID)
+
+        if protocol_never_executed:         # Set FIRST_..._ID when protocol is not executed yet
+            fir_msg, sec_msg = self.FIRST_ST_TRIM_ID, self.FIRST_END_TRIM_ID
+        else:                               # Set SECOND_..._ID when protocol is finished
+            fir_msg, sec_msg = self.SECOND_ST_TRIM_ID, self.SECOND_END_TRIM_ID
+
+        self.put_marker_to_queue(send_queues_dict, fir_msg)
         self.log_marker(file_handler, self.diff(t0, current_time), marker_id = self.ST_TRIM_ID, description = "Trash data in the TRIM period")
 
         wait_for = self.at(current_time, self.t_trim)
         self.wait_until(wait_for)
 
-        self.put_marker_to_queue(send_queues_dict, self.END_TRIM_ID)
+        self.put_marker_to_queue(send_queues_dict, sec_msg)
         self.log_marker(file_handler, self.diff(t0, wait_for), marker_id = self.END_TRIM_ID, description = "Trash data in the TRIM period")
 
     def initialize_soundplay(self):
@@ -279,25 +271,5 @@ class PROTOCOL_con():
         np.savetxt(file_handler, formatted_data, delimiter=',', fmt='%s')
 
 if __name__ == "__main__":
-    
-    
-    t0 = time.perf_counter_ns()
-    
-    #CON_SOUND.play()
-    print(((time.perf_counter_ns() - t0) / 1e9))
-    print('CONTRACT')
-    print(((time.perf_counter_ns() - t0) / 1e9))
-    time.sleep(2)
-
-    #REL_SOUND.play()
-    print(((time.perf_counter_ns() - t0) / 1e9))
-    print('RELASE')
-    print(((time.perf_counter_ns() - t0) / 1e9))
-    time.sleep(2)
-
-    #RES_SOUND.play()
-    print(((time.perf_counter_ns() - t0) / 1e9))
-    print('REST')
-    print(((time.perf_counter_ns() - t0) / 1e9))
-    time.sleep(1)
+    pass
 

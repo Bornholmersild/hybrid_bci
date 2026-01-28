@@ -89,9 +89,14 @@ class Filtering:
         """
         
         rts = []
+        # Within channels
         mean = np.mean(data, axis=0, keepdims=False)
         std  = np.std(data, axis=0, keepdims=False)
-            
+
+        # Across channels
+        #mean = np.mean(data, keepdims=False)
+        #std  = np.std(data, keepdims=False)
+        
         if len(data.shape) == 1:
             rts.append( (data - mean) / (std + 1e-8) )
             return np.array(rts).T
@@ -100,6 +105,7 @@ class Filtering:
             rts.append( (data[:, i] - mean[i]) / (std[i] + 1e-8) )
         
         return np.array(rts).T
+    
 
 class EEG_preprocessing(Filtering):
     def __init__(self, fs = 125):
@@ -217,59 +223,6 @@ class EEG_preprocessing(Filtering):
                 print(f"Channel which is rejected: {self.channel_names[i]}")
 
         return signal[:, keep_idx], keep_idx
-    
-    ''' continous_wavelet_transform function
-    def continous_wavelet_transform(self, epoch_data):
-        
-        # Perform continuous wavelet transform on multi-epoch, multi-channel data.
-        # Returns full time-frequency maps for each epoch and channel.
-
-        # Parameters
-        # ----------
-        # epoch_data : ndarray
-        #     Shape (n_epochs, n_channels, n_samples)
-
-        # Returns
-        # -------
-        # X_wt_all : ndarray
-        #     Shape (n_channels, n_epochs, n_freqs, n_samples)
-        # wt_freqs : ndarray
-        #     Frequencies corresponding to the scales
-        
-        wt_obj = "cmor1.5-1.0"
-        wt_dt = 1/self.fs
-        wt_freqs_interst = np.linspace(6, 32, 50)
-        wt_scales = pywt.frequency2scale(wt_obj, wt_freqs_interst) / wt_dt
-        
-        num_ch = epoch_data.shape[2]
-        num_epoch = epoch_data.shape[0]
-
-        X_wt_all = []
-
-        for sch in range(num_ch):
-            X_wt = []
-
-            for epo in range(num_epoch):
-                wt_coef, wt_freqs = pywt.cwt(
-                    data =  epoch_data[epo, :, sch],
-                    scales = wt_scales,
-                    wavelet = wt_obj,
-                    method = 'conv',
-                    sampling_period=wt_dt,
-                    #axis = 0,
-                    precision = 12
-                )
-
-                X_wt.append(np.abs(wt_coef)**2) 
-                
-            
-            #mean_wt = np.mean(X_wt, axis=0)
-            #print(mean_wt.shape)
-        
-            X_wt_all.append(X_wt)
-        
-        return np.array(X_wt_all, dtype=float), wt_freqs
-    '''
 
 class EMG_preprocessing(Filtering):
     def __init__(self, fs = 2000):

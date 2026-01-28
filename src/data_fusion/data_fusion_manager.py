@@ -1,3 +1,6 @@
+# Remove warnings regarding API
+from ..utilities import warnings_config # noqa: F401 / RUFF(F401)
+
 # Manage path and arguments
 from pathlib import Path
 import msvcrt
@@ -14,9 +17,8 @@ from datetime import datetime
 # Own implementation
 from .EMG_collector import EMG_con as EMG
 from .EEG_collector import EEG_con as EEG
-from ..utilities.dynamixel_control import main as MC
+#from ..utilities.dynamixel_control import main as MC
 from ..utilities.create_record_folders import create_recording_folder
-from ..utilities.cue_gui import run_gui
 from ..experiment.experimental_protocol import PROTOCOL_con as PROTOCOL
        
 current_dir = Path(__file__).resolve().parent     # folder of current script
@@ -25,19 +27,19 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 # Constants #
 #-----------#
-METHOD = '_ EEG _'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
+METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "test_markers"                 # Name of the subject : subject 0, subject 1
-FINGER_NAME = 'flex_index_finger'                       # Name of the data file
-NUM_EPOCHS = 3                                         # Number of epochs per experiment
+SUBJECT_NAME = "subject_test"                 # Name of the subject : subject 0, subject 1
+FINGER_NAME = 'flex_thumb_finger'                       # Name of the data file
+NUM_EPOCHS = 1                                         # Number of epochs per experiment
 REST_DURATION = 2                                       # Rest duration (sec) during 1 trial
 ONSET_DURATION = 4                                      # ONSET duration (sec) during 1 trial
 REL_DURATION = 2                                        # Release duration (sec) during 1 trial
 TRIM_DURATION = 3                                       # Trim duration (sec) in the beginning and end of experiment
 MC_PORT = 'COM8'                                        # Define MC port
 EEG_PORT = 'COM9'                                       # Define EEG port
-EMG_SELECT_SENSORS = (3, 5)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
-EMG_SAMPLES_PER_READ = 500                             # Samples per read for the EMG sensors
+EMG_SELECT_SENSORS = (0, 2)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
+EMG_SAMPLES_PER_READ = 200                             # Samples per read for the EMG sensors
 MODES = {
     "MC _ _":    ["MC", "PRO"],
     "MC EEG _":  ["MC", "EEG", "PRO"],
@@ -57,32 +59,37 @@ MODES = {
 * Remember to check when processes start and it might need to be shifted
 '''
 
-def MC_start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_init, barrier_execute, stream_on_event):
-    mc_ins = MC.Ada_con(co_mod = 0, re_only = False, devicename = MC_PORT)  # linux: '/dev/ttyUSB0', windows: 'COM3'
+def MC_start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_init, stream_on_event):
+    #mc_ins = MC.Ada_con(co_mod = 0, re_only = False, devicename = MC_PORT)  # linux: '/dev/ttyUSB0', windows: 'COM3'
     barrier_init.wait()
-    print('MC - Starting process.')
-    mc_ins.start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_execute, stream_on_event)
-    mc_ins.close()
+    
+    print('MC NOT IMPLEMENTATED WITH STREAM_ON_EVENT and WITHOUT BARRIER_EXEC')
+    #mc_ins.start(q_MC, q_ICOM_MC, q_RCOM_MC, stream_on_event)
+    #mc_ins.close()
 
-def EEG_start(q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_init, barrier_execute, stream_on_event):
+def EEG_start(q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_init, stream_on_event):
     eeg_ins = EEG(serial_port = EEG_PORT)  # BEWARE OF SERIAL_PORT
     barrier_init.wait()
-    print('EEG - Starting process.')
-    eeg_ins.start(q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, barrier_execute, stream_on_event)
+    
+    eeg_ins.start(q_log_EEG, q_ICOM_EEG, q_RCOM_EEG, stream_on_event)
+    print('\nEEG - Process is terminated')
 
-def EMG_start(q_log_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_init, barrier_execute, stream_on_event):
-    emg_ins = EMG(select_sensors = EMG_SELECT_SENSORS, samples_per_read = EMG_SAMPLES_PER_READ, units = 'mV')
+def EMG_start(q_log_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_init, stream_on_event):
+    emg_ins = EMG(select_sensors = EMG_SELECT_SENSORS,
+                  samples_per_read = EMG_SAMPLES_PER_READ,
+                  units = 'mV')
+    
     barrier_init.wait()
-    print('EMG - Starting process.')
-    emg_ins.start(q_log_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_execute, stream_on_event)
-
-def GUI_start(q_r_PRO : JoinableQueue, which_finger : str, barrier_init : Any | None):
-    run_gui(event_queue = q_r_PRO, which_finger = which_finger, barrier_init = barrier_init)
+    
+    emg_ins.start(q_log_EMG = q_log_EMG,
+                  q_ICOM_EMG = q_ICOM_EMG, 
+                  q_RCOM_EMG = q_RCOM_EMG,
+                  stream_on_event = stream_on_event)
+    print('\nEMG - Process is terminated')
 
 def PROTOCOL_start(q_i_PRO : JoinableQueue,
                    q_r_PRO : JoinableQueue,
                    barrier_init : Any,
-                   barrier_execute : Any,
                    shutdown_event : Any,
                    stream_on_event : Any,
                    q_log_EEG : JoinableQueue,
@@ -94,10 +101,15 @@ def PROTOCOL_start(q_i_PRO : JoinableQueue,
                             release_duration = REL_DURATION,
                             trim_duration = TRIM_DURATION)
     barrier_init.wait()
-    print('PROTOCOL - Starting process.')
-    protocol_ins.start(q_i_PRO, q_r_PRO, barrier_execute, stream_on_event, q_log_EEG, q_log_EMG)
+    
+    protocol_ins.start(q_ICOM_PRO = q_i_PRO, 
+                       q_RCOM_PRO = q_r_PRO,
+                       stream_on_event = stream_on_event,
+                       q_log_EEG = q_log_EEG,
+                       q_log_EMG = q_log_EMG)
     
     shutdown_event.set()        # Set shutdown_event to terminate all processes
+    print('\nPRO - Process is terminated')
 
 #---------------#
 # Configuration #
@@ -112,7 +124,6 @@ OWN_PROCESSES = {
     'EEG' : OWN_PROCESS('EEG', EEG_start),
     'EMG' : OWN_PROCESS('EMG', EMG_start),
     'PRO' : OWN_PROCESS('PRO', PROTOCOL_start),
-    'GUI' : OWN_PROCESS('GUI', GUI_start),
 }
 
 def send_command_queue(q_i_MC, q_i_EEG, q_i_EMG, q_i_PRO, instruction, method):
@@ -138,7 +149,7 @@ def listen_for_terminal_input(q_i_MC : Optional[JoinableQueue],
     barrier_init.wait()
     command = None
     
-    print('Write "record" to start protocol and write "stop" to end execution')
+    print('\nWrite "record" to start protocol and write "stop" to end execution')
     while not shutdown_event.is_set():
         
         if msvcrt.kbhit():                     # key pressed?
@@ -180,7 +191,7 @@ def check_sensor_status(q_r_EEG : JoinableQueue,
     This function listens to those queues and sets the stream_on_event when both sensors are ready.
     '''
     EEG_ready = False
-    EMG_ready = False      # SET TO FALSE AFTER DEBUG
+    EMG_ready = False      
     msg = 'False'
     while not stream_on_event.is_set():
 
@@ -234,14 +245,16 @@ def build_system(active_modes : Dict):
 
     shutdown_event : multiprocessing.Event
         Whenever the experimental protocol terminates. shutdown_event is set and allows all processes to terminate via listen_for_terminal_input()
+    
+    stream_on_event : multiprocessing.Event
+        Event Trigger when EEG and EMG is started and streaming data. Ensure syncronization between processes
     """
     queues = {}
     processes = []
 
     num_modes = len(active_modes)
-    barrier_init = Barrier(num_modes + 2)     # Purpose: To hold processes until all is initilized + listen_for_terminal_input Thread and GUI_START Process
-    barrier_exec = Barrier(num_modes)         # Purpose: To hold processes to insure all is syncronized
-    stream_on_event = Event()
+    barrier_init = Barrier(num_modes + 1)     # Purpose: To hold processes until all is initilized + listen_for_terminal_input Thread
+    stream_on_event = Event()                 # Event trigger. Syncronizes EEG, EMG and protocol. When data stream is ready
 
     for key in active_modes:
         # Queues for inter-process communications
@@ -255,10 +268,10 @@ def build_system(active_modes : Dict):
             shutdown_event = Event()                # Purpose: Whenever protocol terminates, set this true and it will terminate all processes
             q_log_EEG = queues.get('EEG', (None, None, None))[0]
             q_log_EMG = queues.get('EMG', (None, None, None))[0]
-            args = (q_i, q_r, barrier_init, barrier_exec, shutdown_event, stream_on_event, q_log_EEG, q_log_EMG)        # Pass q_i_EEG and q_i_EMG to protocol process for sending 'marker' messages
+            args = (q_i, q_r, barrier_init, shutdown_event, stream_on_event, q_log_EEG, q_log_EMG)        # Pass q_i_EEG and q_i_EMG to protocol process for sending 'marker' messages
             
         else:
-            args = (q_log, q_i, q_r, barrier_init, barrier_exec, stream_on_event)
+            args = (q_log, q_i, q_r, barrier_init, stream_on_event)
 
         process_temp = Process(
             target = OWN_PROCESSES[key].start_func,
@@ -275,7 +288,7 @@ def main():
 
     active = MODES[METHOD]             # Extract the mode from the desired argument
 
-    queues, processes, barrier_init, shutdown_event, stream_on_event  = build_system(active)
+    queues, processes, barrier_init, shutdown_event, stream_on_event = build_system(active)
 
     # What is [1] -> Get the q_i for each process.
     # If a process is not active, default set value (q_log, q_i, q_r) to None 
@@ -286,25 +299,21 @@ def main():
     
     q_r_EEG = queues.get('EEG', (None, None, None))[2]
     q_r_EMG = queues.get('EMG', (None, None, None))[2]
-    q_r_PRO = queues.get('PRO', (None, None, None))[2]
     
-    # Initilize gui process separatly, because it does not need queues.
-    # It require to receive protocol messenges 
-    gui_process = Process(target = OWN_PROCESSES['GUI'].start_func, args = (q_r_PRO, FINGER_NAME, barrier_init))
-    
+    # Thread for user input
     terminal = threading.Thread(
         target = listen_for_terminal_input,
         args = (q_i_MC, q_i_EEG, q_i_EMG, q_i_PRO, barrier_init, METHOD, shutdown_event),
         daemon = True
     )
 
+    # Respond from processes using sensors
     start_streaming = threading.Thread(
         target = check_sensor_status,
         args = (q_r_EEG, q_r_EMG, stream_on_event),
         daemon = True
     )
 
-    gui_process.start()
     for p in processes:
         p.start()
 

@@ -1,0 +1,8 @@
+time,marker_id,description
+9.66e-05,111,Trash data in the TRIM period
+3.0000966,222,Trash data in the TRIM period
+3.0006115,10,Rest period started
+5.0006115,20,Action period started
+9.0006115,30,Release period started
+11.0007886,111,Trash data in the TRIM period
+14.0007886,222,Trash data in the TRIM period

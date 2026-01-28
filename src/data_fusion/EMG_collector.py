@@ -17,7 +17,7 @@ class EMG_con():
         self.num_ch = len(self.ss)
         self.emg = TrignoEMG(channel_range = self.ss, samples_per_read = self.spr, units = units)
 
-        print(f"EMG - Number of EMG sensors {self.num_ch}")
+        print(f"\nEMG - Number of EMG sensors {self.num_ch}")
         print("EMG - EMG collector initialized with sensors:", self.ss)
 
     def create_file_header(self, filepath):
@@ -31,10 +31,11 @@ class EMG_con():
             #np.savetxt(f, np.array(headers), delimiter=',', fmt='%s')
             f.write(','.join(sensor_headers) + '\n')
             
-    def start(self, q_EMG, q_ICOM_EMG, q_RCOM_EMG, barrier_exec, stream_on_event):
+    def start(self, q_log_EMG, q_ICOM_EMG, q_RCOM_EMG, stream_on_event):
         
         record_flag = False
         file_handle = None
+        protocol_never_executed = True
 
         while True:
 
@@ -47,24 +48,23 @@ class EMG_con():
                         self.create_file_header(filepath=filepath_EMG)
                         file_handle = open(filepath_EMG, 'a', buffering=1)
 
-                        print("EMG - Waiting for barrier.")
-                        barrier_exec.wait()
-                        # MAYBE MOVE START_STREAM BEFORE WAIT IN BOTH EEG AND EMG and SET A TIMER FOR PROTOCOL
                         exit_while = False
                         self.emg.start()
                         while not stream_on_event.is_set():
                             if not exit_while:
                                 q_RCOM_EMG.put('True')
                                 exit_while = True
-                            self.emg.read()
                             stream_on_event.wait(timeout=0.01)
+                            self.emg.read()
 
-                        #self.emg.read()
                         print(f'EMG - Start stream: {time.time()}')
 
                         record_flag = True
+                        protocol_never_executed = False
 
                     case 'stop':
+                        if protocol_never_executed:
+                            break
                         print("EMG - Stopping EMG recording.")
                         record_flag = False
                         self.emg.stop()
