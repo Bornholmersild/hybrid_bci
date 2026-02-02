@@ -117,6 +117,7 @@ class PROTOCOL_con():
             filepath (str, optional): Path to save markers. Defaults to None.
             barrier (multiprocessing.Barrier, optional): Synchronization barrier. Defaults to None.
         """
+        print(f"Trial {epoch_idx}/{self.num_epochs}")
         #------------#
         # Rest event #
         #------------#
@@ -152,7 +153,6 @@ class PROTOCOL_con():
             print("[OK] Experimental protocol completed.")
             return True
 
-        print(f"Trial {epoch_idx + 1}/{self.num_epochs}")
         return False
     
     def execute_trim_period(self,
@@ -169,13 +169,13 @@ class PROTOCOL_con():
             fir_msg, sec_msg = self.SECOND_ST_TRIM_ID, self.SECOND_END_TRIM_ID
 
         self.put_marker_to_queue(send_queues_dict, fir_msg)
-        self.log_marker(file_handler, self.diff(t0, current_time), marker_id = self.ST_TRIM_ID, description = "Trash data in the TRIM period")
+        self.log_marker(file_handler, self.diff(t0, current_time), marker_id = fir_msg, description = "Trash data in the TRIM period")
 
         wait_for = self.at(current_time, self.t_trim)
         self.wait_until(wait_for)
 
         self.put_marker_to_queue(send_queues_dict, sec_msg)
-        self.log_marker(file_handler, self.diff(t0, wait_for), marker_id = self.END_TRIM_ID, description = "Trash data in the TRIM period")
+        self.log_marker(file_handler, self.diff(t0, wait_for), marker_id = sec_msg, description = "Trash data in the TRIM period")
 
     def initialize_soundplay(self):
         '''
@@ -191,9 +191,9 @@ class PROTOCOL_con():
         # Extract directory #
         #-------------------#
         path_dir = os.path.dirname(os.path.abspath(__file__))
-        CON_dir = path_dir + "/beep_sounds" + "/CONTRACT_MOD.mp3"
-        REL_dir = path_dir + "/beep_sounds" + "/RELEASE_MOD.mp3"
-        RES_dir = path_dir + "/beep_sounds" + "/REST_MOD.mp3"
+        CON_dir = path_dir + "/beep_sounds" + "/CONTRACT_beep.mp3"
+        REL_dir = path_dir + "/beep_sounds" + "/RELEASE_beep.mp3"
+        RES_dir = path_dir + "/beep_sounds" + "/REST_beep.mp3"
 
         #-----------------#
         # Initlize pygame #
