@@ -91,5 +91,11 @@ time,marker_id,description
 264.0095414,10,Rest period started
 267.0095414,20,Action period started
 270.0095414,30,Release period started
-273.0100064,201,Rest period started
-276.0100064,202,Action period started
+273.0100064,10,Rest period started
+276.0100064,20,Action period started
+279.0100064,30,Release period started
+282.0102755,10,Rest period started
+285.0102755,20,Action period started
+288.0102755,30,Release period started
+291.0105316,10,Rest period started
+294.0105316,20,Action period started

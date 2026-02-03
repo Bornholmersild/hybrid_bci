@@ -383,6 +383,7 @@ class visualize_EMG():
                 self.toolbox_ins.add_markers_to_plot(plt_axis = ax, marker_file = markers, stop_markers_at = stop_marker)
 
         fig.tight_layout()
+        #plt.savefig('edited_images/EMG_data_analysis/meanEpoch_DataDriftAndNorm_withinCH.png')
         plt.show() 
 
 def main():
@@ -402,7 +403,7 @@ def main():
 
     NUM_EPOCHS = 30
     # TOTAL_EPOCHS = 35*3
-    TRIAL_PERIOD = 9
+    TRIAL_PERIOD = 8
     TRIM_PERIOD = 3
 
     RMS_SAMPLING_WINDOW = 200
@@ -416,23 +417,23 @@ def main():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_2',
+        subjects = 'subject_0',
         modality = 'EEG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_2',
+        subjects = 'subject_0',
         modality = 'EMG',
-        fingers = 'thumb',
+        fingers = 'index',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_2',
+        subjects = 'subject_0',
         modality = 'Markers',
-        fingers = 'thumb',
+        fingers = 'index',
         prefix = 'flex'
     )
 
@@ -449,21 +450,21 @@ def main():
                                 trim_period = TRIM_PERIOD)
     
     
-    EEG, EEG_epoch, EEG_epoch_mean, total_epochs_EEG = load_ins.load_datasets_EEG(
-        path_to_data_files = EEG_files,
-        preprocessing_func = EEG_ins.preprocessing_routine,
-        bandpass_lowcut = EEG_LOWCUT,
-        bandpass_highcut = EEG_HIGHCUT,
-        extract_event = 'all'
-    )
+    # EEG, EEG_epoch, EEG_epoch_mean, total_epochs_EEG = load_ins.load_datasets_EEG(
+    #     path_to_data_files = EEG_files,
+    #     preprocessing_func = EEG_ins.preprocessing_routine,
+    #     bandpass_lowcut = EEG_LOWCUT,
+    #     bandpass_highcut = EEG_HIGHCUT,
+    #     extract_event = 'all'
+    # )
 
     EMG, EMG_epoch, EMG_epoch_mean, total_epochs_EMG = load_ins.load_datasets_EMG(
-        path_to_data_files = EMG_files,
+        path_to_data_files = EMG_files[1],
         preprocessing_func = EMG_ins.preprocessing_routine
     )
     
     RMS, RMS_epoch, RMS_epoch_mean, total_epochs_RMS = load_ins.load_datasets_EMG(
-        path_to_data_files = EMG_files,
+        path_to_data_files = EMG_files[1],
         preprocessing_func = EMG_ins.preprocessing_routine_rms,
         sample_window = RMS_SAMPLING_WINDOW,
         window_stepsize = RMS_WINDOW_STEPSIZE
@@ -471,10 +472,10 @@ def main():
 
     markers = load_ins.load_datasets_marker(marker_files)
 
-    if total_epochs_EEG != total_epochs_EMG or total_epochs_EEG != total_epochs_RMS or total_epochs_EMG != total_epochs_RMS:
-        raise ValueError('The total amount of epochs if different from EEG, EMG or RMS')
-    else:
-        total_epochs = total_epochs_EEG
+    # if total_epochs_EEG != total_epochs_EMG or total_epochs_EEG != total_epochs_RMS or total_epochs_EMG != total_epochs_RMS:
+    #     raise ValueError('The total amount of epochs if different from EEG, EMG or RMS')
+    # else:
+    #     total_epochs = total_epochs_EEG
 
 
     # #--------------------------------------#
@@ -485,7 +486,7 @@ def main():
                                 rms_windows_stepsize = RMS_WINDOW_STEPSIZE,
                                 which_finger = 'unsued',
                                 num_epochs = NUM_EPOCHS,
-                                total_epochs = total_epochs,
+                                total_epochs = total_epochs_EMG,
                                 trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
     
@@ -496,17 +497,17 @@ def main():
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_thumb, rms = RMS_thumb, markers = marker_dict[2], display_window = [480, 600])
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_thumb, rms = RMS_thumb, markers = marker_dict[2], display_window = [600, 720])
 
-    vis_EMG_ins.plot_rms_across_channels(emg = EMG, 
-                                         rms = RMS,
-                                         markers = markers[0],
-                                         display_window = 0)
-    
-    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean,
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean, 
                                          rms = RMS_epoch_mean,
                                          markers = markers[0],
                                          display_window = 0)
     
-    vis_EEG_ins.plot_egg_across_channels(EEG_epoch_mean, markers = markers[0], display_window = 0)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean,
+    #                                      rms = RMS_epoch_mean,
+    #                                      markers = markers[0],
+    #                                      display_window = 0)
+    
+    # vis_EEG_ins.plot_egg_across_channels(EEG_epoch_mean, markers = markers[0], display_window = 0)
 
 if __name__ == '__main__':
     main()

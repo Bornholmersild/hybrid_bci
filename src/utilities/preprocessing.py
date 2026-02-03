@@ -158,19 +158,19 @@ class EEG_preprocessing(Filtering):
         if extract_event == 'ALL':
             START_TRIAL_MARKER = 10
             END_TRIAL_MARKER = {10, 201}
-            TRIAL_PERIOD = 8
+            TRIAL_PERIOD = 8            # 8         - 3sec period : 9
         elif extract_event == 'REST':
             START_TRIAL_MARKER = 10
             END_TRIAL_MARKER = {20, 201}
-            TRIAL_PERIOD = 2
+            TRIAL_PERIOD = 2                        # 3
         elif extract_event == 'CONTRACT':
             START_TRIAL_MARKER = 20
             END_TRIAL_MARKER = {30, 201}
-            TRIAL_PERIOD = 4
+            TRIAL_PERIOD = 4            # 3
         elif extract_event == 'RELEASE':
             START_TRIAL_MARKER = 30
             END_TRIAL_MARKER = {10, 201}
-            TRIAL_PERIOD = 2
+            TRIAL_PERIOD = 2            # 3
         else:
             raise ValueError(f'{extract_event} is not valid event type')
 
@@ -412,6 +412,25 @@ class EMG_preprocessing(Filtering):
             rms_vals_all.append(rms_vals)
         return np.array(rms_vals_all).T
 
+    def data_drift(self, EMG, baseline_period = None):
+        '''
+        Find the minimum data values as a baseline and subtract it from all data across channels
+        '''
+
+        if baseline_period is None:
+            data = EMG.copy()
+        elif isinstance(baseline_period, list):
+            if len(baseline_period) != 2:
+                raise ValueError('baseline_period must have two elements')
+            st, ed = baseline_period[0], baseline_period[1]
+            data = EMG[st:ed, :].copy()
+        else:
+            raise ValueError('baseline_period must be list of two elements or None')
+        
+        baseline = np.mean(data, axis=0, keepdims=True)
+        print(f'baseline value: {baseline}')
+        return data - baseline
+
     def preprocessing_routine(self,
                               raw_emg : np.ndarray,
                             **kwargs) -> np.ndarray:
@@ -463,8 +482,8 @@ class EMG_preprocessing(Filtering):
         else:
             resample_temp = resample(EMG_trim, target_len, axis = 0)
             print(f'Did resample from {n_samples} to {target_len}')
-        
-        EMG = EMG_filter_ins.zscore_within_channel(resample_temp, mode = 'across_ch')
+
+        EMG = EMG_filter_ins.zscore_within_channel(resample_temp, mode = 'within_ch')
 
         print(f'Total Time {total_time} s\n'
             f'Real fs: {real_fs} Hz\n'
@@ -536,7 +555,7 @@ class EMG_preprocessing(Filtering):
             resample_temp = resample(RMS_temp, target_len, axis = 0)
             print(f'Did resample from {n_samples} to {target_len}')
 
-        RMS = EMG_filter_ins.zscore_within_channel(resample_temp, mode = 'across_ch')
+        RMS = EMG_filter_ins.zscore_within_channel(resample_temp, mode = 'within_ch')
 
         print(f'\nTotal Time {total_time} s\n'
             f'Real fs: {real_fs} Hz\n'
