@@ -1,6 +1,6 @@
 {
   "Subject_0": {
-    "timestamp": "2026-01-27",
+    "timestamp": "2026-02-5",
     "name": "Nicklas Grønvall",
     "gender": "Male",
     "age": 27,
@@ -11,14 +11,15 @@
   },
 
   "Subject_1": {
-    "timestamp": "2026-01-29",
+    "timestamp": "2026-02-6",
     "name": "Magnus nielson",
     "gender": "Male",
-    "age": 0,
-    "neurological_disorder": "Parkinson",
-    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
-    "hand_arm_injury": "what",
-    "dominant_hand": "X"
+    "age": 24,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right",
+    "NOTES" : "Index finger pulls middle finger with it and pinky pulls ring finger"
   },
 
     "Subject_2": {

@@ -87,8 +87,6 @@ class load_datasets():
     def load_datasets_EEG(self,
                           path_to_data_files : Union[list | Path],
                           preprocessing_func : Callable,
-                          bandpass_lowcut : int = 2,
-                          bandpass_highcut : int = 32,
                           **preprocess_kwargs) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         '''
         Load EEG data set given desired data path files from -> find_flex_files
@@ -129,16 +127,13 @@ class load_datasets():
             # Preprocessing
             EEG_filt, num_epochs = preprocessing_func(
                 raw_eeg = EEG_raw,
-                bandpass_lowcut = bandpass_lowcut,
-                bandpass_highcut = bandpass_highcut,
                 all_markers = EEG_marker_log,
                 **preprocess_kwargs)
 
             all_data.append(EEG_filt)
             total_epochs += num_epochs
 
-        all_data_array = np.array(all_data)
-        EEG = all_data_array.reshape(-1, eeg_num_ch)
+        EEG = np.concatenate(all_data, axis = 0)
         print(f"Reshaped data shape: {EEG.shape}")
 
         EEG_samples_per_epoch = EEG.shape[0] // total_epochs      
@@ -149,6 +144,15 @@ class load_datasets():
         EEG_epoch_mean = EEG_epoch.mean(axis=0)
         print(f"Epoched data shape: {EEG_epoch.shape}")
         print(f"Mean epoch data shape: {EEG_epoch_mean.shape}")
+
+        # baseline = EEG_epoch[:, 0:3*125, :].mean(axis = 0)     # 375, 16
+        # baseline = baseline.mean(axis = 0)
+        # EEG = EEG - baseline
+
+        # EEG_epoch = EEG.reshape(total_epochs, EEG_samples_per_epoch, eeg_num_ch)
+
+        # EEG_epoch_mean = EEG_epoch.mean(axis=0)
+        
 
         return EEG, EEG_epoch, EEG_epoch_mean, total_epochs
     
@@ -177,9 +181,7 @@ class load_datasets():
             all_data.append(emg_processed)
             total_epochs += num_epochs
 
-
-        all_data_array = np.array(all_data)
-        RMS = all_data_array.reshape(-1, emg_num_ch)
+        RMS = np.concatenate(all_data, axis = 0)
         print(f"Reshaped data shape: {RMS.shape}")
 
         RMS_samples_per_epoch = RMS.shape[0] // total_epochs      
@@ -276,7 +278,7 @@ class visualize_EEG(plot_toolbox):
         rows = 4
         select_ch = 0
         for _ in range(rows):
-            fig, axs = plt.subplots(rows, 1, figsize=(3, 2.5*rows), dpi=150)
+            fig, axs = plt.subplots(rows, 1, figsize=(10, 2.5*rows), dpi=150)
 
             time = np.arange(n_samp_emg) / self.fs
 
@@ -395,15 +397,15 @@ def main():
     
     EMG_LOWCUT = 20
     EMG_HIGHCUT = 450
-    EEG_LOWCUT = 2
-    EEG_HIGHCUT = 32
+    EEG_LOWCUT = 0.3          # 2
+    EEG_HIGHCUT = 5        # 32
 
     EMG_NUM_CH = 3
     EEG_NUM_CH = 16
 
     NUM_EPOCHS = 30
     # TOTAL_EPOCHS = 35*3
-    TRIAL_PERIOD = 8
+    TRIAL_PERIOD = 9
     TRIM_PERIOD = 3
 
     RMS_SAMPLING_WINDOW = 200
@@ -417,23 +419,23 @@ def main():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_0',
+        subjects = 'subject_0_closedEyes',
         modality = 'EEG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_0',
+        subjects = 'subject_1_closedEyes',
         modality = 'EMG',
-        fingers = 'index',
+        fingers = 'thumb',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_0',
+        subjects = 'subject_0_closedEyes',
         modality = 'Markers',
-        fingers = 'index',
+        fingers = 'thumb',
         prefix = 'flex'
     )
 
@@ -441,11 +443,10 @@ def main():
     # Load data #
     #-----------#
     
-    EEG_ins = EEG_preprocessing(fs = EEG_FREQ)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ,
                                 bandpass_lowcut = EMG_LOWCUT,
                                 bandpass_highcut = EMG_HIGHCUT,
-                                num_epochs = NUM_EPOCHS,
                                 trial_period = TRIAL_PERIOD,
                                 trim_period = TRIM_PERIOD)
     
@@ -453,21 +454,32 @@ def main():
     # EEG, EEG_epoch, EEG_epoch_mean, total_epochs_EEG = load_ins.load_datasets_EEG(
     #     path_to_data_files = EEG_files,
     #     preprocessing_func = EEG_ins.preprocessing_routine,
-    #     bandpass_lowcut = EEG_LOWCUT,
-    #     bandpass_highcut = EEG_HIGHCUT,
     #     extract_event = 'all'
     # )
 
+    ######################################################################################
+    markers = load_ins.load_datasets_marker(marker_files)
+
+    vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
+
+    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers[0], display_window = [0, 9*5])
+
     EMG, EMG_epoch, EMG_epoch_mean, total_epochs_EMG = load_ins.load_datasets_EMG(
-        path_to_data_files = EMG_files[1],
-        preprocessing_func = EMG_ins.preprocessing_routine
+        path_to_data_files = EMG_files[0],
+        preprocessing_func = EMG_ins.preprocessing_routine,
+        hampel_windowsize = 100,
+        hampel_sigma = 3,
+        hampel_plot_option = [True, None]
     )
     
     RMS, RMS_epoch, RMS_epoch_mean, total_epochs_RMS = load_ins.load_datasets_EMG(
-        path_to_data_files = EMG_files[1],
+        path_to_data_files = EMG_files[0],
         preprocessing_func = EMG_ins.preprocessing_routine_rms,
         sample_window = RMS_SAMPLING_WINDOW,
-        window_stepsize = RMS_WINDOW_STEPSIZE
+        window_stepsize = RMS_WINDOW_STEPSIZE,
+        hampel_windowsize = 100,
+        hampel_sigma = 3,
+        hampel_plot_option = [True, None]
     )
 
     markers = load_ins.load_datasets_marker(marker_files)
@@ -484,11 +496,12 @@ def main():
     vis_EMG_ins = visualize_EMG(fs = EMG_FREQ,
                                 rms_sampling_window = RMS_SAMPLING_WINDOW,
                                 rms_windows_stepsize = RMS_WINDOW_STEPSIZE,
-                                which_finger = 'unsued',
+                                which_finger = 'Index',
                                 num_epochs = NUM_EPOCHS,
                                 total_epochs = total_epochs_EMG,
                                 trial_period = TRIAL_PERIOD)
-    vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
+    
+    # vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
     
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_thumb, rms = RMS_thumb, markers = marker_dict[0], display_window = [0, 120])
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_thumb, rms = RMS_thumb, markers = marker_dict[0], display_window = [120, 240])
@@ -497,15 +510,15 @@ def main():
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_thumb, rms = RMS_thumb, markers = marker_dict[2], display_window = [480, 600])
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_thumb, rms = RMS_thumb, markers = marker_dict[2], display_window = [600, 720])
 
-    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean, 
-                                         rms = RMS_epoch_mean,
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG, 
+                                         rms = RMS,
                                          markers = markers[0],
                                          display_window = 0)
     
-    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean,
-    #                                      rms = RMS_epoch_mean,
-    #                                      markers = markers[0],
-    #                                      display_window = 0)
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch_mean,
+                                         rms = RMS_epoch_mean,
+                                         markers = markers[0],
+                                         display_window = 0)
     
     # vis_EEG_ins.plot_egg_across_channels(EEG_epoch_mean, markers = markers[0], display_window = 0)
 

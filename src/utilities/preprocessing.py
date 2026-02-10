@@ -2,6 +2,7 @@ from scipy import signal
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.signal import resample
+from scipy.ndimage import median_filter
 
 class Filtering:
     def __init__(self, fs=125.0):
@@ -48,7 +49,7 @@ class Filtering:
         sos = signal.butter(order, normal_cutoff, btype = 'low', output = 'sos')
         return signal.sosfiltfilt(sos, data, axis=0), sos
     
-    def visualize_filters(self, EEG_before_filtering, EEG_after_filtering, select_channel = 1, sos = None):
+    def plot_visualize_filters(self, EEG_before_filtering, EEG_after_filtering, select_channel = 1, sos = None):
         """
         Figure 1: Visualize Butterworth bandpass filter characterization \n
         Figure 2: Visualize Power Spectral Density - That is dominant frequencies in the data \n
@@ -81,42 +82,214 @@ class Filtering:
         plt.legend()
         plt.grid()
         plt.show()
-    
-    def zscore_within_channel(self, data : np.ndarray, mode : str = 'within_ch') -> np.ndarray:
+
+    def plot_hampel_filter(self, original_signal: np.ndarray, filtered_signal: np.ndarray, outlier_indices: list, medians: np.ndarray, thresholds: np.ndarray, zoom : list | None = None):
         """
-        Standalize data with zscore within or across channels
+        Plot original and Hampel-filtered signals for all channels.
 
         Parameters
         ----------
-        data : np.ndarray (samples, channels)
-            Dataset to standalize
+        original_signal : np.ndarray
+            Shape (n_samples, n_channels)
+        filtered_signal : np.ndarray
+            Shape (n_samples, n_channels)
+        outlier_indices : list of lists
+            outlier_indices[ch] contains indices for channel ch
+        medians : np.ndarray
+            Shape (n_samples, n_channels)
+        thresholds : np.ndarray
+            Shape (n_samples, n_channels)
+        EMG_FREQ : float
+            Sampling frequency (Hz)
+        """
+        if isinstance(zoom, list):
+            st, ex = zoom
+            st = st * self.fs
+            ex = ex * self.fs
+            original_signal = original_signal[st:ex, :]
+            filtered_signal = filtered_signal[st:ex, :]
+            medians = medians[st:ex, :]
+            thresholds = thresholds[st:ex, :]
+
+        n_samples, n_channels = original_signal.shape
+        time = np.arange(n_samples) / self.fs
+        ymax = np.max(original_signal)
+        ymin = np.min(original_signal)
+
+        # Create 2 subplots per channel
+        fig, axes = plt.subplots(
+            n_channels * 2,
+            1,
+            figsize=(14, n_channels * 8),
+            sharex=True
+        )
+
+        # Ensure axes is always indexable
+        if n_channels == 1:
+            axes = np.array(axes)
+
+        for ch in range(n_channels):
+
+            ax_orig = axes[2 * ch]
+            ax_filt = axes[2 * ch + 1]
+
+            # ---------- Original signal ----------
+            ax_orig.plot(
+                time,
+                original_signal[:, ch],
+                linewidth=0.5,
+                color="royalblue",
+                label=f"Original (Ch {ch+1})"
+            )
+
+            ax_orig.fill_between(
+                time,
+                medians[:, ch] + thresholds[:, ch],
+                medians[:, ch] - thresholds[:, ch],
+                color="gray",
+                alpha=0.3,
+                label="Median ± Threshold"
+            )
+
+            # Mark detected outliers
+            if len(outlier_indices[ch]) > 0 and zoom is None:
+                ax_orig.plot(
+                    time[outlier_indices[ch]],
+                    original_signal[outlier_indices[ch], ch],
+                    "ro",
+                    markersize=0.5,
+                    label="Outliers"
+                )
+
+            ax_orig.set_ylabel("Amplitude")
+            ax_orig.set_title(f"Channel {ch+1} - Original with Hampel Bands")
+            ax_orig.legend(loc="upper right")
+            ax_orig.set_xlim(time[0], time[-1])
+            ax_orig.set_ylim(ymin, ymax)
+
+            # ---------- Filtered signal ----------
+            ax_filt.plot(
+                time,
+                filtered_signal[:, ch],
+                linewidth=0.5,
+                color="seagreen",
+                label=f"Filtered (Ch {ch+1})"
+            )
+
+            ax_filt.set_ylabel("Amplitude")
+            ax_filt.set_title(f"Channel {ch+1} - Filtered")
+            ax_filt.legend(loc="upper right")
+            ax_filt.set_xlim(time[0], time[-1])
+            ax_filt.set_ylim(ymin, ymax)
+
+        axes[-1].set_xlabel("Time (s)")
+        plt.tight_layout()
+        plt.show()
+    
+    def zscore(self, data: np.ndarray, mode: str = "within_ch") -> np.ndarray:
+        """
+        Z-score standardization within or across channels.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            Shape (samples,) or (samples, channels)
         mode : str
-            How to perform zscore on dataset. Example: 'within_ch' or 'across_ch' (default = 'within_ch')
-        
+            'within_ch'  -> z-score independently per channel
+            'across_ch'  -> z-score using global mean/std
+
         Returns
         -------
-        :returns: z-scored data
+        np.ndarray
+            Z-scored data with same shape as input
         """
+
+        data = np.asarray(data)
+
+        if mode == "within_ch":
+            axis = 0
+        elif mode == "across_ch":
+            axis = None
+        else:
+            raise ValueError("mode must be 'within_ch' or 'across_ch'")
+
+        mean = np.mean(data, axis=axis, keepdims=True)
+        std  = np.std(data, axis=axis, keepdims=True)
+        std_max = np.maximum(std, 1e-8)
+
+        return (data - mean) / (std_max)
+    
+    def hampel_filter(self, x: np.ndarray, window_size: int = 200, n_sigmas: float = 3.0, plot_filter_results: list = [False, None]):
+        """
+        Hampel filter for multi-channel signals.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Shape (n_samples, n_channels)
+        window_size : int
+            Number of samples on EACH side of the center sample
+        n_sigmas : float
+            Threshold multiplier
+        plot_filter_results : list
+            First element -> bool to display filter results
+            second element -> list of specfic time window or None to display all
+
+        Returns
+        -------
+        filtered_data   : np.ndarray (n_samples, n_channels)
+        """
+
+        x = np.asarray(x, dtype=float)
+
+        if x.ndim != 2:
+            raise ValueError("Input must be 2D: (samples, channels)")
+
+        # Scale factor to make MAD comparable to standard deviation
+        # (valid for approximately Gaussian data)
+        k_scale = 1.4826
+        kernel = 2 * window_size + 1
+
+        # Median per channel (filter only along time axis)
+        medians = median_filter(
+            x,
+            size=(kernel, 1),
+            mode="reflect"
+        )
+
+        # Difference between real signal and the typical values of the signal
+        diff = np.abs(x - medians)
+
+        # Robust estimate of local variability (Median Absolute Deviation) per channel
+        mad = k_scale * median_filter(
+            diff,
+            size=(kernel, 1),
+            mode="reflect"
+        )
+
+        thresholds = n_sigmas * mad
+
+        outlier_mask = diff > thresholds
+
+        x_filt = x.copy()
+        x_filt[outlier_mask] = medians[outlier_mask]
+
+        if plot_filter_results[0]:
+            # Collect outlier indices per channel
+            outlier_indices = [
+                np.nonzero(outlier_mask[:, ch])[0].tolist()
+                for ch in range(x.shape[1])
+            ]
+            for ch in range(x.shape[1]):
+                print('Number of outliers:', len(outlier_indices[ch])) 
+
+            self.plot_hampel_filter(original_signal = x, filtered_signal = x_filt, outlier_indices = outlier_indices, medians = medians, thresholds = thresholds, zoom = plot_filter_results[1])
         
-        rts = []
-        if mode == 'within_ch':
-            mean = np.mean(data, axis=0, keepdims=False)
-            std  = np.std(data, axis=0, keepdims=False)
-        elif mode == 'across_ch':
-            mean = np.mean(data, keepdims=False)
-            std  = np.std(data, keepdims=False)
-        
-        for i in range(data.shape[1]):
-            if np.isscalar(mean):
-                rts.append( (data[:, i] - mean) / (std + 1e-8) )
-            else:
-                rts.append( (data[:, i] - mean[i]) / (std[i] + 1e-8) )
-        
-        return np.array(rts).T
+        return x_filt
     
 
 class EEG_preprocessing(Filtering):
-    def __init__(self, fs = 125):
+    def __init__(self, fs = 125, bandpass_lowcut : int = 2, bandpass_highcut : int = 32, ):
         super().__init__()
         
         self.channel_names = [
@@ -130,6 +303,8 @@ class EEG_preprocessing(Filtering):
         "P3",  "P4"     # parietal
         ]
         self.fs = fs
+        self.lowcut = bandpass_lowcut
+        self.highcut = bandpass_highcut
 
     def trim_trial_periods(self,
                            EEG_bandpass : np.ndarray,
@@ -158,19 +333,19 @@ class EEG_preprocessing(Filtering):
         if extract_event == 'ALL':
             START_TRIAL_MARKER = 10
             END_TRIAL_MARKER = {10, 201}
-            TRIAL_PERIOD = 8            # 8         - 3sec period : 9
+            TRIAL_PERIOD = 9
         elif extract_event == 'REST':
             START_TRIAL_MARKER = 10
             END_TRIAL_MARKER = {20, 201}
-            TRIAL_PERIOD = 2                        # 3
+            TRIAL_PERIOD = 3
         elif extract_event == 'CONTRACT':
             START_TRIAL_MARKER = 20
             END_TRIAL_MARKER = {30, 201}
-            TRIAL_PERIOD = 4            # 3
+            TRIAL_PERIOD = 3
         elif extract_event == 'RELEASE':
             START_TRIAL_MARKER = 30
             END_TRIAL_MARKER = {10, 201}
-            TRIAL_PERIOD = 2            # 3
+            TRIAL_PERIOD = 3
         else:
             raise ValueError(f'{extract_event} is not valid event type')
 
@@ -247,14 +422,12 @@ class EEG_preprocessing(Filtering):
                     enter_trial = False
                     num_epochs += 1             
                     #print(f'Trial from {st} to {ed}, len: {ed - st}')
-                    #print(f'Time period {trial_period}\n Real fs: {real_fs} Hz\n Target len: {target_len}\n Original len: {n_samples}')           
+                    #print(f'Time period 9\n Real fs: {real_fs} Hz\n Target len: {target_len}\n Original len: {n_samples}')           
         
         return np.concatenate(resampled_data, axis=0), num_epochs
     
     def preprocessing_routine(self,
-                              raw_eeg : np.ndarray, 
-                              bandpass_lowcut : int = 2, 
-                              bandpass_highcut : int = 32, 
+                              raw_eeg : np.ndarray,
                               all_markers : list = None,
                               extract_event : str = 'all',
                               **kwargs) -> tuple[np.ndarray, int]:
@@ -289,25 +462,36 @@ class EEG_preprocessing(Filtering):
 
         EEG_filter_ins = Filtering(fs = self.fs)
         
-        EEG_notch = EEG_filter_ins.notch(raw_eeg, cutoff=50, Q=30)
-        EEG_bandpass, _ = EEG_filter_ins.butter_bandpass(EEG_notch, lowcut=bandpass_lowcut, highcut=bandpass_highcut, order=4)
+        EEG_notch = EEG_filter_ins.notch(data = raw_eeg, cutoff = 50, Q = 30)
+        EEG_bandpass, _ = EEG_filter_ins.butter_bandpass(data = EEG_notch, lowcut = self.lowcut, highcut = self.highcut, order = 4)
 
         # --------------------------------------------------
         # 2) RESAMPLE + Trim
         # --------------------------------------------------
         markers_idx = np.nonzero(all_markers)[0]
         
-        EEG_trim, num_epochs = self.trim_trial_periods(EEG_bandpass = EEG_bandpass, 
+        EEG_trim, num_epochs = self.trim_trial_periods(
+                                        EEG_bandpass = EEG_bandpass, 
                                         all_markers = all_markers, 
                                         markers_idx = markers_idx, 
                                         extract_event = str.upper(extract_event))
         
         # --------------------------------------------------
-        # 3) Z-SCORE STANDARDIZATION
+        # 3) Common Average Reference - CAR
         # --------------------------------------------------
-        EEG_norm = EEG_filter_ins.zscore_within_channel(EEG_trim, mode = 'within_ch')
+        EEG_car = EEG_trim - np.mean(EEG_trim, axis = 1, keepdims = True)       # (S, C)
 
-        return EEG_norm, num_epochs
+        # FIND POWER OF SIGNAL
+        # power = np.abs(EEG_car) ** 2
+        from scipy.signal import hilbert
+        power = np.abs(hilbert(EEG_car, axis=0)) ** 2
+        
+        # --------------------------------------------------
+        # 4) Z-SCORE STANDARDIZATION
+        # --------------------------------------------------
+        #EEG_norm = EEG_filter_ins.zscore(EEG_car, mode = 'within_ch')
+
+        return power, num_epochs
     
     def reject_channel(self, signal, print_rej_ch=False):
         mean_uV = np.mean(np.abs(signal), axis=0)
@@ -374,7 +558,7 @@ class EEG_preprocessing(Filtering):
             
         EEG_resampled = resample(EEG_bandpass, target_len, axis=0)
 
-        EEG_norm = EEG_filter_ins.zscore_within_channel(EEG_resampled)
+        EEG_norm = EEG_filter_ins.zscore(EEG_resampled)
             
         print(f'Total Time {total_time}\n Real fs: {real_fs} Hz\n Target len: {target_len}\n, Original len: {n_samples}')
 
@@ -385,8 +569,7 @@ class EMG_preprocessing(Filtering):
                  fs = 2000,
                  bandpass_lowcut : int = 20,
                  bandpass_highcut : int = 450,
-                 num_epochs : int = 30,
-                 trial_period : int = 8,
+                 trial_period : int = 9,
                  trim_period : int = 3,):
         super().__init__()
 
@@ -398,9 +581,9 @@ class EMG_preprocessing(Filtering):
         self.fs = fs
         self.lowcut = bandpass_lowcut
         self.highcut = bandpass_highcut
-        self.num_epochs = num_epochs
         self.trial_period = trial_period
         self.trim_period = trim_period
+        self.expected_num_epochs = 30
 
     def sliding_rms(self, signal, window_size=10, step_size=5):
         rms_vals_all = []
@@ -412,27 +595,11 @@ class EMG_preprocessing(Filtering):
             rms_vals_all.append(rms_vals)
         return np.array(rms_vals_all).T
 
-    def data_drift(self, EMG, baseline_period = None):
-        '''
-        Find the minimum data values as a baseline and subtract it from all data across channels
-        '''
-
-        if baseline_period is None:
-            data = EMG.copy()
-        elif isinstance(baseline_period, list):
-            if len(baseline_period) != 2:
-                raise ValueError('baseline_period must have two elements')
-            st, ed = baseline_period[0], baseline_period[1]
-            data = EMG[st:ed, :].copy()
-        else:
-            raise ValueError('baseline_period must be list of two elements or None')
-        
-        baseline = np.mean(data, axis=0, keepdims=True)
-        print(f'baseline value: {baseline}')
-        return data - baseline
-
     def preprocessing_routine(self,
                               raw_emg : np.ndarray,
+                              hampel_windowsize : int = 200,
+                              hampel_sigma : int = 3.0,
+                              hampel_plot_option : list = [False, None],
                             **kwargs) -> np.ndarray:
         '''
         Performs the full preprocessing routine:
@@ -459,43 +626,65 @@ class EMG_preprocessing(Filtering):
         EMG_notch = EMG_filter_ins.notch(raw_emg, cutoff=50, Q=30)
         EMG_bandpass, _ = EMG_filter_ins.butter_bandpass(EMG_notch, lowcut = self.lowcut, highcut = self.highcut, order=4)
 
+        #===============================#
+        # 2) Calculate number of epochs #
+        #===============================#
+        num_trim_samples = self.fs * self.trim_period * 2                   # Total samples from trim period. WHY *2 : Trim egde on both sides
+        num_valid_samples = EMG_bandpass.shape[0] - num_trim_samples        # Total samples for experimental period
+        cal_num_epochs = num_valid_samples / (self.fs * self.trial_period)  # Divide out total samples in sections of trial periods -> Results in number of epochs
+        if cal_num_epochs != self.expected_num_epochs:                      # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print(f'OBSERVATION - NUM OF EPOCH ({cal_num_epochs}) IS DIFFERNET FROM USUAL {self.expected_num_epochs}')
+        
+        cal_num_epochs = int(np.round(cal_num_epochs))
+      
         # --------#
-        # 2) TRIM #
+        # 3) TRIM #
         # --------#
         trim_idx_102 = self.fs * self.trim_period
-        trim_idx_201 = (self.fs * self.trial_period * self.num_epochs) + trim_idx_102
+        trim_idx_201 = (self.fs * self.trial_period * cal_num_epochs) + trim_idx_102        # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
         EMG_trim = EMG_bandpass[trim_idx_102 : trim_idx_201, :]
         print(f"Trim 102 idx {trim_idx_102}\n"
             f"Trim 201 idx {trim_idx_201}\n"
             f'EMG_trim shape: {EMG_trim.shape}\n')
         
+        # -----------------#
+        # 4) Hampel filter #
+        # -----------------#
+        EMG_hampel = EMG_filter_ins.hampel_filter(x = EMG_trim, window_size = hampel_windowsize, n_sigmas = hampel_sigma, plot_filter_results = hampel_plot_option)
+
         # ------------#
-        # 3) RESAMPLE #
+        # 5) RESAMPLE #
         # ------------#
-        total_time = self.num_epochs * self.trial_period                              # total time in seconds.
-        n_samples = EMG_trim.shape[0]
+        total_time = cal_num_epochs * self.trial_period                              # total time in seconds.
+        n_samples = EMG_hampel.shape[0]
         real_fs = n_samples / total_time                              # Real frequency
         target_len = int( np.round(n_samples  * (self.fs / real_fs)) )            # The correct number of samples for desired frequency
 
         if n_samples == target_len:
-            resample_temp = EMG_trim
+            resample_temp = EMG_hampel
         else:
-            resample_temp = resample(EMG_trim, target_len, axis = 0)
+            resample_temp = resample(EMG_hampel, target_len, axis = 0)
             print(f'Did resample from {n_samples} to {target_len}')
 
-        EMG = EMG_filter_ins.zscore_within_channel(resample_temp, mode = 'within_ch')
+        # -----------------#
+        # 6) Normalization #
+        # -----------------#
+        EMG = EMG_filter_ins.zscore(resample_temp, mode = 'within_ch')
 
         print(f'Total Time {total_time} s\n'
             f'Real fs: {real_fs} Hz\n'
             f'Target len: {target_len}\n'
             f'EMG original len: {n_samples}\n')
 
-        return EMG, self.num_epochs
+        return EMG, cal_num_epochs
 
     def preprocessing_routine_rms(self,
                             raw_emg : np.ndarray,
                             sample_window : int = 200,
                             window_stepsize : int = 50,
+                            hampel_windowsize : int = 200,
+                            hampel_sigma : int = 3.0,
+                            hampel_plot_option : list = [False, None],
                             **kwargs) -> np.ndarray:
         '''
         Performs the full preprocessing routine:
@@ -524,25 +713,41 @@ class EMG_preprocessing(Filtering):
         EMG_notch = EMG_filter_ins.notch(raw_emg, cutoff=50, Q=30)
         EMG_bandpass, _ = EMG_filter_ins.butter_bandpass(EMG_notch, lowcut = self.lowcut, highcut = self.highcut, order=4)
 
+        #===============================#
+        # 2) Calculate number of epochs #
+        #===============================#
+        num_trim_samples = self.fs * self.trim_period * 2                   # Total samples from trim period. WHY *2 : Trim egde on both sides
+        num_valid_samples = EMG_bandpass.shape[0] - num_trim_samples        # Total samples for experimental period
+        cal_num_epochs = num_valid_samples / (self.fs * self.trial_period)  # Divide out total samples in sections of trial periods -> Results in number of epochs
+        if cal_num_epochs != self.expected_num_epochs:                      # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print(f'OBSERVATION - NUM OF EPOCH ({cal_num_epochs}) IS DIFFERNET FROM USUAL {self.expected_num_epochs}')
+        
+        cal_num_epochs = int(np.round(cal_num_epochs))
+
         # --------#
-        # 2) TRIM #
+        # 3) TRIM #
         # --------#
         trim_idx_102 = self.fs * self.trim_period
-        trim_idx_201 = (self.fs * self.trial_period * self.num_epochs) + trim_idx_102
+        trim_idx_201 = (self.fs * self.trial_period * cal_num_epochs) + trim_idx_102
         EMG_trim = EMG_bandpass[trim_idx_102 : trim_idx_201, :]
         print(f"Trim 102 idx {trim_idx_102}\n"
            f"Trim 201 idx {trim_idx_201}\n"
            f'EMG_trim shape: {EMG_trim.shape}\n')
         
+        # -----------------#
+        # 4) Hampel filter #
+        # -----------------#
+        EMG_hampel = EMG_filter_ins.hampel_filter(x = EMG_trim, window_size = hampel_windowsize, n_sigmas = hampel_sigma, plot_filter_results = hampel_plot_option)
+
         # -------#
-        # 3) RMS #
+        # 5) RMS #
         # -------#
-        RMS_temp = self.sliding_rms(signal = EMG_trim, window_size = sample_window, step_size = window_stepsize)
+        RMS_temp = self.sliding_rms(signal = EMG_hampel, window_size = sample_window, step_size = window_stepsize)
 
         # ------------#
-        # 4) RESAMPLE #
+        # 6) RESAMPLE #
         # ------------#
-        total_time = self.num_epochs * self.trial_period                              # total time in seconds.
+        total_time = cal_num_epochs * self.trial_period                              # total time in seconds.
         n_samples = RMS_temp.shape[0]
         real_fs = n_samples / total_time                              # Real frequency
         ceil_fs = int( np.ceil(real_fs) )                                   # Get as close to the real fs
@@ -554,8 +759,11 @@ class EMG_preprocessing(Filtering):
         else:
             resample_temp = resample(RMS_temp, target_len, axis = 0)
             print(f'Did resample from {n_samples} to {target_len}')
-
-        RMS = EMG_filter_ins.zscore_within_channel(resample_temp, mode = 'within_ch')
+        
+        # -----------------#
+        # 7) Normalization #
+        # -----------------#
+        RMS = EMG_filter_ins.zscore(resample_temp, mode = 'within_ch')
 
         print(f'\nTotal Time {total_time} s\n'
             f'Real fs: {real_fs} Hz\n'
@@ -563,7 +771,7 @@ class EMG_preprocessing(Filtering):
             f'EMG original len: {EMG_trim.shape[0]}\n'
             f'RMS len: {RMS.shape[0]}\n')
 
-        return RMS, self.num_epochs
+        return RMS, cal_num_epochs
     
 
 if '__main__' == __name__:

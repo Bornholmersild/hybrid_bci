@@ -15,3 +15,6 @@ Thumbs.db
 
 # Images for article
 edited_images/
+
+# BCI2a dataset
+src/utilities/BCI2a_dataset/

@@ -191,9 +191,9 @@ class PROTOCOL_con():
         # Extract directory #
         #-------------------#
         path_dir = os.path.dirname(os.path.abspath(__file__))
-        CON_dir = path_dir + "/beep_sounds" + "/CONTRACT_beep.mp3"
-        REL_dir = path_dir + "/beep_sounds" + "/RELEASE_beep.mp3"
-        RES_dir = path_dir + "/beep_sounds" + "/REST_beep.mp3"
+        CON_dir = path_dir + "/beep_sounds" + "/CONTRACT_MOD.mp3"
+        REL_dir = path_dir + "/beep_sounds" + "/RELEASE_MOD.mp3"
+        RES_dir = path_dir + "/beep_sounds" + "/REST_MOD.mp3"
 
         #-----------------#
         # Initlize pygame #
