@@ -34,40 +34,40 @@
     "NOTES" : "During index flex - Subject tends to bend all fingers during contracting"
   },
 
-    "Subject4": {
-    "timestamp": "X",
-    "name": "X",
-    "gender": "X",
-    "age": 0,
-    "neurological_disorder": "Parkinson",
-    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
-    "hand_arm_injury": "what",
-    "dominant_hand": "X"
+    "Subject_3": {
+    "timestamp": "2026-02-11",
+    "name": "Unknown",
+    "gender": "Unknown",
+    "age": "Unknown",
+    "neurological_disorder": "Unknown",
+    "musculoskeletal_disorders": "Unknown",
+    "hand_arm_injury": "Unknown",
+    "dominant_hand": "Unknown"
   },
 
-    "Subject5": {
-    "timestamp": "X",
-    "name": "X",
-    "gender": "X",
-    "age": 0,
-    "neurological_disorder": "Parkinson",
-    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
-    "hand_arm_injury": "what",
-    "dominant_hand": "X"
+    "Subject_4": {
+    "timestamp": "2026-02-12",
+    "name": "Saravana Babu",
+    "gender": "male",
+    "age": 33,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right"
   },
 
-    "Subject6": {
-    "timestamp": "X",
-    "name": "X",
-    "gender": "X",
-    "age": 0,
-    "neurological_disorder": "Parkinson",
-    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
-    "hand_arm_injury": "what",
-    "dominant_hand": "X"
+    "Subject_5": {
+    "timestamp": "2026-02-12",
+    "name": "Tobi",
+    "gender": "Male",
+    "age": 23,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right"
   },
 
-    "Subject7": {
+    "Subject_6": {
     "timestamp": "X",
     "name": "X",
     "gender": "X",

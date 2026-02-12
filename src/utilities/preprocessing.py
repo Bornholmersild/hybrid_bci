@@ -289,7 +289,11 @@ class Filtering:
     
 
 class EEG_preprocessing(Filtering):
-    def __init__(self, fs = 125, bandpass_lowcut : int = 2, bandpass_highcut : int = 32, ):
+    def __init__(self, fs = 125,
+                 bandpass_lowcut : int = 2,
+                 bandpass_highcut : int = 32,
+                 trial_period : int = 9,
+                 trim_period : int = 3):
         super().__init__()
         
         self.channel_names = [
@@ -305,6 +309,9 @@ class EEG_preprocessing(Filtering):
         self.fs = fs
         self.lowcut = bandpass_lowcut
         self.highcut = bandpass_highcut
+        self.trial_period = trial_period
+        self.trim_period = trim_period
+        self.expected_num_epochs = 30
 
     def trim_trial_periods(self,
                            EEG_bandpass : np.ndarray,
@@ -426,11 +433,7 @@ class EEG_preprocessing(Filtering):
         
         return np.concatenate(resampled_data, axis=0), num_epochs
     
-    def preprocessing_routine(self,
-                              raw_eeg : np.ndarray,
-                              all_markers : list = None,
-                              extract_event : str = 'all',
-                              **kwargs) -> tuple[np.ndarray, int]:
+    def preprocessing_routine(self, raw_eeg : np.ndarray) -> tuple[np.ndarray, int]:
         '''
         Performs the full preprocessing routine:
         1) Notch + Bandpass filter
@@ -440,58 +443,59 @@ class EEG_preprocessing(Filtering):
         ----------
         raw_eeg : np.ndarray
             This holds keys for a specfic class (finger). NOTE - If raw_eeg is a list, it will be converted to a dict with key 'single_class'. 2D array - Dim(samples, channels)
-        bandpass_lowcut : int
-            Lowpass frequency
-        bandpass_highcut : int
-            Highpass frequency
-        all_markers : list
-            A log of all marker data including zero
-        extract_event : str
-            Choise which segment of data to extract (For example: 'ALL', 'CONTRACT', 'RELEASE', 'REST')
-        
+
         Return
         ------
         :return: np.ndarray of normalized EEG data
         :return: Int of the total amount of epochs for one experiment
         '''
-
-        # --------------------------------------------------
-        # 1) NOTCH + BANDPASS FILTER
-        # --------------------------------------------------
-
-
+        # ---------------------------#
+        # 1) NOTCH + BANDPASS FILTER #
+        # ---------------------------#
         EEG_filter_ins = Filtering(fs = self.fs)
         
         EEG_notch = EEG_filter_ins.notch(data = raw_eeg, cutoff = 50, Q = 30)
         EEG_bandpass, _ = EEG_filter_ins.butter_bandpass(data = EEG_notch, lowcut = self.lowcut, highcut = self.highcut, order = 4)
 
-        # --------------------------------------------------
-        # 2) RESAMPLE + Trim
-        # --------------------------------------------------
-        markers_idx = np.nonzero(all_markers)[0]
+        #===============================#
+        # 2) Calculate number of epochs #
+        #===============================#
+        trim_samples = self.fs * self.trim_period
+        samples_per_epoch = self.fs * self.trial_period
+
+        valid_samples = EEG_bandpass.shape[0] - 2 * trim_samples            # Total samples for experimental period. WHY *2 : Trim egde on both sides
+        num_epochs = int( np.round(valid_samples / samples_per_epoch) )     # Divide out total samples in sections of samples per epoch -> Results in number of epochs
+
+        trim_start = trim_samples
+        trim_end = trim_start + num_epochs * samples_per_epoch              # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
+
+        if valid_samples % samples_per_epoch != 0:                          # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print("Warning: Samples not perfectly divisible by trial period. "
+                  f"Calculated num epochs: {valid_samples / samples_per_epoch}")
         
-        EEG_trim, num_epochs = self.trim_trial_periods(
-                                        EEG_bandpass = EEG_bandpass, 
-                                        all_markers = all_markers, 
-                                        markers_idx = markers_idx, 
-                                        extract_event = str.upper(extract_event))
+        #=========#
+        # 3) TRIM #
+        #=========#       
+        EEG_trim = EEG_bandpass[trim_start : trim_end, :]
+        print(f"Original shape {EEG_bandpass.shape}\n"
+              f'EEG_trim shape: {EEG_trim.shape}\n')
         
-        # --------------------------------------------------
-        # 3) Common Average Reference - CAR
-        # --------------------------------------------------
-        EEG_car = EEG_trim - np.mean(EEG_trim, axis = 1, keepdims = True)       # (S, C)
+        #===================================#
+        # 4) Common Average Reference - CAR #
+        #===================================#
+        #EEG_car = EEG_trim - np.mean(EEG_trim, axis = 1, keepdims = True)       # (S, C)
 
         # FIND POWER OF SIGNAL
         # power = np.abs(EEG_car) ** 2
-        from scipy.signal import hilbert
-        power = np.abs(hilbert(EEG_car, axis=0)) ** 2
+        #from scipy.signal import hilbert
+        #power = np.abs(hilbert(EEG_car, axis=0)) ** 2
         
         # --------------------------------------------------
-        # 4) Z-SCORE STANDARDIZATION
+        # 5) Z-SCORE STANDARDIZATION
         # --------------------------------------------------
-        #EEG_norm = EEG_filter_ins.zscore(EEG_car, mode = 'within_ch')
+        EEG_norm = EEG_filter_ins.zscore(EEG_trim, mode = 'within_ch')
 
-        return power, num_epochs
+        return EEG_norm, num_epochs
     
     def reject_channel(self, signal, print_rej_ch=False):
         mean_uV = np.mean(np.abs(signal), axis=0)
@@ -531,9 +535,6 @@ class EEG_preprocessing(Filtering):
         :return dict EEG_epoch: Dict with epoched EEG data - EEG_epoch[keys()](epochs, samples_per_epoch, channels)
         :return dict EEG_epoch_mean: Dict with mean over epochs - EEG_epoch_mean[keys()](samples_per_mean_epoch, channels)
         '''
-        print('\n-----------------------\n'
-              'Old preprocessing routine\n'
-              '-------------------------\n')
         # For MRCP:     0.3 - 4 Hz
         # For MU ERP:   6 - 13 Hz
         # For BETA ERP: 14 - 30 Hz
@@ -597,10 +598,11 @@ class EMG_preprocessing(Filtering):
 
     def preprocessing_routine(self,
                               raw_emg : np.ndarray,
+                              rms_windowsize : int = 200,
+                              rms_stepsize : int = 50,
                               hampel_windowsize : int = 200,
                               hampel_sigma : int = 3.0,
-                              hampel_plot_option : list = [False, None],
-                            **kwargs) -> np.ndarray:
+                              hampel_plot_option : list = [False, None]) -> tuple[np.ndarray, np.ndarray, int]:
         '''
         Performs the full preprocessing routine:
         1) Notch + Bandpass filter
@@ -615,9 +617,6 @@ class EMG_preprocessing(Filtering):
 
         :return np.ndarray EMG: Normalized continuous EMG data - EMG(samples, channels)
         '''
-        print('\n--------------------------\n'
-              'Process to obtain EMG data\n'
-              '--------------------------\n')
         # ---------------------------#
         # 1) NOTCH + BANDPASS FILTER #
         # ---------------------------#
@@ -629,110 +628,24 @@ class EMG_preprocessing(Filtering):
         #===============================#
         # 2) Calculate number of epochs #
         #===============================#
-        num_trim_samples = self.fs * self.trim_period * 2                   # Total samples from trim period. WHY *2 : Trim egde on both sides
-        num_valid_samples = EMG_bandpass.shape[0] - num_trim_samples        # Total samples for experimental period
-        cal_num_epochs = num_valid_samples / (self.fs * self.trial_period)  # Divide out total samples in sections of trial periods -> Results in number of epochs
-        if cal_num_epochs != self.expected_num_epochs:                      # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
-            print(f'OBSERVATION - NUM OF EPOCH ({cal_num_epochs}) IS DIFFERNET FROM USUAL {self.expected_num_epochs}')
-        
-        cal_num_epochs = int(np.round(cal_num_epochs))
-      
-        # --------#
+        trim_samples = self.fs * self.trim_period
+        samples_per_epoch = self.fs * self.trial_period
+
+        valid_samples = EMG_bandpass.shape[0] - 2 * trim_samples            # Total samples for experimental period. WHY *2 : Trim egde on both sides
+        num_epochs = int( np.round(valid_samples / samples_per_epoch) )     # Divide out total samples in sections of samples per epoch -> Results in number of epochs
+
+        trim_start = trim_samples
+        trim_end = trim_start + num_epochs * samples_per_epoch              # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
+
+        if valid_samples % samples_per_epoch != 0:                          # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print("Warning: Samples not perfectly divisible by trial period. "
+                  f"Calculated num epochs: {valid_samples / samples_per_epoch}")
+        #=========#
         # 3) TRIM #
-        # --------#
-        trim_idx_102 = self.fs * self.trim_period
-        trim_idx_201 = (self.fs * self.trial_period * cal_num_epochs) + trim_idx_102        # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
-        EMG_trim = EMG_bandpass[trim_idx_102 : trim_idx_201, :]
-        print(f"Trim 102 idx {trim_idx_102}\n"
-            f"Trim 201 idx {trim_idx_201}\n"
-            f'EMG_trim shape: {EMG_trim.shape}\n')
-        
-        # -----------------#
-        # 4) Hampel filter #
-        # -----------------#
-        EMG_hampel = EMG_filter_ins.hampel_filter(x = EMG_trim, window_size = hampel_windowsize, n_sigmas = hampel_sigma, plot_filter_results = hampel_plot_option)
-
-        # ------------#
-        # 5) RESAMPLE #
-        # ------------#
-        total_time = cal_num_epochs * self.trial_period                              # total time in seconds.
-        n_samples = EMG_hampel.shape[0]
-        real_fs = n_samples / total_time                              # Real frequency
-        target_len = int( np.round(n_samples  * (self.fs / real_fs)) )            # The correct number of samples for desired frequency
-
-        if n_samples == target_len:
-            resample_temp = EMG_hampel
-        else:
-            resample_temp = resample(EMG_hampel, target_len, axis = 0)
-            print(f'Did resample from {n_samples} to {target_len}')
-
-        # -----------------#
-        # 6) Normalization #
-        # -----------------#
-        EMG = EMG_filter_ins.zscore(resample_temp, mode = 'within_ch')
-
-        print(f'Total Time {total_time} s\n'
-            f'Real fs: {real_fs} Hz\n'
-            f'Target len: {target_len}\n'
-            f'EMG original len: {n_samples}\n')
-
-        return EMG, cal_num_epochs
-
-    def preprocessing_routine_rms(self,
-                            raw_emg : np.ndarray,
-                            sample_window : int = 200,
-                            window_stepsize : int = 50,
-                            hampel_windowsize : int = 200,
-                            hampel_sigma : int = 3.0,
-                            hampel_plot_option : list = [False, None],
-                            **kwargs) -> np.ndarray:
-        '''
-        Performs the full preprocessing routine:
-        1) Notch + Bandpass filter
-        2) Resample + z-score standardization + Secmentation into epochs
-
-        :param dict raw_emg: This holds keys for a specfic class (finger). NOTE - If raw_emg is a list, it will be converted to a dict with key 'single_class'. 2D array - Dim(samples, channels)
-        :param int bandpass_lowcut: Lowpass frequency
-        :param int bandpass_highcut: Highpass frequency
-        :param int num_channels: Number of activated channels
-        :param int num_epochs: Number of epochs (trials) in the dataset
-        :param int trial_period: Time of each epoch
-        :param int sample_window: Amount of samples in the sliding window.
-        :param int window_stepsize: Sliding window step size. This means the step size over the signal.
-
-        :return np.ndarray RMS:  Normalized continuous RMS data - RMS(samples, channels)
-        '''
-        print('\n--------------------------\n'
-              'Process to obtain RMS data\n'
-              '--------------------------\n')
-        # ---------------------------#
-        # 1) NOTCH + BANDPASS FILTER #
-        # ---------------------------#
-        EMG_filter_ins = Filtering(fs = self.fs)
-
-        EMG_notch = EMG_filter_ins.notch(raw_emg, cutoff=50, Q=30)
-        EMG_bandpass, _ = EMG_filter_ins.butter_bandpass(EMG_notch, lowcut = self.lowcut, highcut = self.highcut, order=4)
-
-        #===============================#
-        # 2) Calculate number of epochs #
-        #===============================#
-        num_trim_samples = self.fs * self.trim_period * 2                   # Total samples from trim period. WHY *2 : Trim egde on both sides
-        num_valid_samples = EMG_bandpass.shape[0] - num_trim_samples        # Total samples for experimental period
-        cal_num_epochs = num_valid_samples / (self.fs * self.trial_period)  # Divide out total samples in sections of trial periods -> Results in number of epochs
-        if cal_num_epochs != self.expected_num_epochs:                      # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
-            print(f'OBSERVATION - NUM OF EPOCH ({cal_num_epochs}) IS DIFFERNET FROM USUAL {self.expected_num_epochs}')
-        
-        cal_num_epochs = int(np.round(cal_num_epochs))
-
-        # --------#
-        # 3) TRIM #
-        # --------#
-        trim_idx_102 = self.fs * self.trim_period
-        trim_idx_201 = (self.fs * self.trial_period * cal_num_epochs) + trim_idx_102
-        EMG_trim = EMG_bandpass[trim_idx_102 : trim_idx_201, :]
-        print(f"Trim 102 idx {trim_idx_102}\n"
-           f"Trim 201 idx {trim_idx_201}\n"
-           f'EMG_trim shape: {EMG_trim.shape}\n')
+        #=========#       
+        EMG_trim = EMG_bandpass[trim_start : trim_end, :]
+        print(f"Original shape {EMG_bandpass.shape}\n"
+              f'EEG_trim shape: {EMG_trim.shape}\n')
         
         # -----------------#
         # 4) Hampel filter #
@@ -742,37 +655,35 @@ class EMG_preprocessing(Filtering):
         # -------#
         # 5) RMS #
         # -------#
-        RMS_temp = self.sliding_rms(signal = EMG_hampel, window_size = sample_window, step_size = window_stepsize)
+        RMS_temp = self.sliding_rms(signal = EMG_hampel, window_size = rms_windowsize, step_size = rms_stepsize)
 
         # ------------#
         # 6) RESAMPLE #
         # ------------#
-        total_time = cal_num_epochs * self.trial_period                              # total time in seconds.
-        n_samples = RMS_temp.shape[0]
-        real_fs = n_samples / total_time                              # Real frequency
+        total_time = num_epochs * self.trial_period                         # total time in seconds.
+        rms_samples = RMS_temp.shape[0]
+        real_fs = rms_samples / total_time                                  # Real frequency
         ceil_fs = int( np.ceil(real_fs) )                                   # Get as close to the real fs
-        target_len = int( np.round(n_samples  * (ceil_fs / real_fs)) )            # The correct number of samples for desired frequency
+        target_len = int( np.round(rms_samples  * (ceil_fs / real_fs)) )    # The correct number of samples for desired frequency
 
-
-        if n_samples == target_len:
+        if rms_samples == target_len:
             resample_temp = RMS_temp
         else:
             resample_temp = resample(RMS_temp, target_len, axis = 0)
-            print(f'Did resample from {n_samples} to {target_len}')
-        
+            print(f'Did resample from {rms_samples} to {target_len}')
+
         # -----------------#
         # 7) Normalization #
         # -----------------#
         RMS = EMG_filter_ins.zscore(resample_temp, mode = 'within_ch')
+        EMG = EMG_filter_ins.zscore(EMG_hampel, mode = 'within_ch')
 
-        print(f'\nTotal Time {total_time} s\n'
-            f'Real fs: {real_fs} Hz\n'
-            f'Target len: {target_len}\n'
-            f'EMG original len: {EMG_trim.shape[0]}\n'
-            f'RMS len: {RMS.shape[0]}\n')
+        print(f'Total Time {total_time} s\n'
+            f'RMS fs: {real_fs} Hz\n'
+            f'RMS shape: {RMS.shape}\n'
+            f'EMG shape: {EMG.shape}\n')
 
-        return RMS, cal_num_epochs
-    
+        return RMS, EMG, num_epochs
 
 if '__main__' == __name__:
     pass

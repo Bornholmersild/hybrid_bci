@@ -29,7 +29,7 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "subject_1_closedEyes"                 # Name of the subject : subject 0, subject 1
+SUBJECT_NAME = "subject_5"                 # Name of the subject : subject 0, subject 1
 FINGER_NAME = 'flex_thumb_finger'                       # Name of the data file
 NUM_EPOCHS = 30                                         # Number of epochs per experiment
 REST_DURATION = 3                                       # Rest duration (sec) during 1 trial
@@ -191,7 +191,7 @@ def check_sensor_status(q_r_EEG : JoinableQueue,
     This function listens to those queues and sets the stream_on_event when both sensors are ready.
     '''
     EEG_ready = False
-    EMG_ready = False      
+    EMG_ready = False     
     msg = 'False'
     while not stream_on_event.is_set():
 

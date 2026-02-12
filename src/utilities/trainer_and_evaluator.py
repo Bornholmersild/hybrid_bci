@@ -108,7 +108,7 @@ class SingleNet_train_eval():
             optimizer.zero_grad()
 
             # Make predictions for this batch
-            logits, _ = model(inputs)
+            logits, _, _ = model(inputs)
 
             # Compute the loss and its gradients
             loss = criterion(logits, labels)
@@ -140,7 +140,8 @@ class SingleNet_train_eval():
         vtotal = 0
 
         L_list = []
-        H_list = []
+        C_list = []
+        W_list = []
         Y_list = []
 
         # Disable gradient computation and reduce memory consumption.
@@ -149,10 +150,11 @@ class SingleNet_train_eval():
                 vinputs, vlabels = inp.to(device), lab.to(device)
 
                 # Forward pass: compute predicted outputs by passing inputs to the model
-                vlogits, vh_final = model(vinputs)
+                vlogits, context, attn_weight = model(vinputs)
 
                 L_list.append(vlogits.cpu())
-                H_list.append(vh_final.cpu())
+                C_list.append(context.cpu())
+                W_list.append(attn_weight.cpu())
                 Y_list.append(vlabels.cpu())
 
                 # Calculate the loss
@@ -167,4 +169,4 @@ class SingleNet_train_eval():
 
         avg_vloss = running_vloss / len(test_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal
-        return avg_vloss, vacc, [L_list, H_list, Y_list]
+        return avg_vloss, vacc, [L_list, C_list, W_list, Y_list]
