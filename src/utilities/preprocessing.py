@@ -469,9 +469,10 @@ class EEG_preprocessing(Filtering):
         trim_start = trim_samples
         trim_end = trim_start + num_epochs * samples_per_epoch              # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
 
-        if valid_samples % samples_per_epoch != 0:                          # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
-            print("Warning: Samples not perfectly divisible by trial period. "
-                  f"Calculated num epochs: {valid_samples / samples_per_epoch}")
+        if (trim_end - trim_start) % samples_per_epoch != 0:                # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print(f"Warning: Samples not perfectly divisible by trial period. Calculated num epochs: {valid_samples / samples_per_epoch}")
+            print(f'Trim samples at start and end: {trim_start}, {trim_end}\n')
+            print(f"Total samples: {EEG_bandpass.shape[0]}, Valid samples: {valid_samples}, Samples per epoch: {samples_per_epoch}, Calculated num epochs: {num_epochs}")
         
         #=========#
         # 3) TRIM #
@@ -493,9 +494,9 @@ class EEG_preprocessing(Filtering):
         # --------------------------------------------------
         # 5) Z-SCORE STANDARDIZATION
         # --------------------------------------------------
-        EEG_norm = EEG_filter_ins.zscore(EEG_trim, mode = 'within_ch')
+        #EEG_norm = EEG_filter_ins.zscore(EEG_trim, mode = 'within_ch')
 
-        return EEG_norm, num_epochs
+        return EEG_trim, num_epochs
     
     def reject_channel(self, signal, print_rej_ch=False):
         mean_uV = np.mean(np.abs(signal), axis=0)
@@ -637,9 +638,11 @@ class EMG_preprocessing(Filtering):
         trim_start = trim_samples
         trim_end = trim_start + num_epochs * samples_per_epoch              # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
 
-        if valid_samples % samples_per_epoch != 0:                          # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
-            print("Warning: Samples not perfectly divisible by trial period. "
-                  f"Calculated num epochs: {valid_samples / samples_per_epoch}")
+        if (trim_end - trim_start) % samples_per_epoch != 0:                # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print(f"Warning: Samples not perfectly divisible by trial period. Calculated num epochs: {valid_samples / samples_per_epoch}")
+            print(f'Trim samples at start and end: {trim_start}, {trim_end}\n')
+            print(f"Total samples: {EMG_bandpass.shape[0]}, Valid samples: {valid_samples}, Samples per epoch: {samples_per_epoch}, Calculated num epochs: {num_epochs}")
+
         #=========#
         # 3) TRIM #
         #=========#       
@@ -671,12 +674,14 @@ class EMG_preprocessing(Filtering):
         else:
             resample_temp = resample(RMS_temp, target_len, axis = 0)
             print(f'Did resample from {rms_samples} to {target_len}')
-
+        
         # -----------------#
         # 7) Normalization #
         # -----------------#
-        RMS = EMG_filter_ins.zscore(resample_temp, mode = 'within_ch')
-        EMG = EMG_filter_ins.zscore(EMG_hampel, mode = 'within_ch')
+        RMS_low, _ = EMG_filter_ins.lowpass_filter(resample_temp, cutoff = 10, order = 4)
+        
+        RMS = EMG_filter_ins.zscore(RMS_low, mode = 'across_ch')
+        EMG = EMG_filter_ins.zscore(EMG_hampel, mode = 'across_ch')
 
         print(f'Total Time {total_time} s\n'
             f'RMS fs: {real_fs} Hz\n'

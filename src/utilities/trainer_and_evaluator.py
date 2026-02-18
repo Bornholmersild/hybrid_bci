@@ -24,7 +24,7 @@ class FusionNet_train_eval():
             optimizer.zero_grad()
 
             # Make predictions for this batch
-            logits, _ = model(eeg = eeg, emg = emg)
+            logits, _, _ = model(eeg = eeg, emg = emg)
 
             # Compute the loss and its gradients
             loss = criterion(logits, labels)
@@ -56,7 +56,8 @@ class FusionNet_train_eval():
         vtotal = 0
 
         L_list = []
-        H_list = []
+        C_list = []
+        W_list = []
         Y_list = []
 
         # Disable gradient computation and reduce memory consumption.
@@ -65,10 +66,11 @@ class FusionNet_train_eval():
                 veeg, vemg, vlabels = eeg.to(device), emg.to(device), lab.to(device)
 
                 # Forward pass: compute predicted outputs by passing inputs to the model
-                vlogits, vh_final = model(eeg = veeg, emg = vemg)
+                vlogits, context, attn_weight = model(eeg = veeg, emg = vemg)
 
                 L_list.append(vlogits.cpu())
-                H_list.append(vh_final.cpu())
+                C_list.append(context.cpu())
+                W_list.append(attn_weight.cpu())
                 Y_list.append(vlabels.cpu())
 
                 # Calculate the loss
@@ -83,7 +85,7 @@ class FusionNet_train_eval():
 
         avg_vloss = running_vloss / len(test_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal
-        return avg_vloss, vacc, [L_list, H_list, Y_list]
+        return avg_vloss, vacc, [L_list, C_list, W_list, Y_list]
     
 class SingleNet_train_eval():
     def train_one_epoch(self, model, train_loader, criterion, optimizer, device):
