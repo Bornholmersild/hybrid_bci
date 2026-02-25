@@ -141,10 +141,10 @@ class SingleNet_train_eval():
         vcorrect = 0
         vtotal = 0
 
-        L_list = []
-        C_list = []
-        W_list = []
-        Y_list = []
+        # L_list = []
+        # C_list = []
+        # W_list = []
+        # Y_list = []
 
         # Disable gradient computation and reduce memory consumption.
         with torch.no_grad():
@@ -154,10 +154,10 @@ class SingleNet_train_eval():
                 # Forward pass: compute predicted outputs by passing inputs to the model
                 vlogits, context, attn_weight = model(vinputs)
 
-                L_list.append(vlogits.cpu())
-                C_list.append(context.cpu())
-                W_list.append(attn_weight.cpu())
-                Y_list.append(vlabels.cpu())
+                # L_list.append(vlogits.cpu())
+                # C_list.append(context.cpu())
+                # W_list.append(attn_weight.cpu())
+                # Y_list.append(vlabels.cpu())
 
                 # Calculate the loss
                 vloss = criterion(vlogits, vlabels)
@@ -171,4 +171,4 @@ class SingleNet_train_eval():
 
         avg_vloss = running_vloss / len(test_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal
-        return avg_vloss, vacc, [L_list, C_list, W_list, Y_list]
+        return avg_vloss, vacc, None#[L_list, C_list, W_list, Y_list]

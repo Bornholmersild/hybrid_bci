@@ -18,3 +18,6 @@ edited_images/
 
 # BCI2a dataset
 src/utilities/BCI2a_dataset/
+
+# Tensorboard logging files
+src/models/loggings

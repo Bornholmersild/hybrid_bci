@@ -29,16 +29,16 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "subject_6"                 # Name of the subject : subject 0, subject 1
-FINGER_NAME = 'flex_baseline_finger'                       # Name of the data file
-NUM_EPOCHS = 6                                         # Number of epochs per experiment
+SUBJECT_NAME = "subject_9"                 # Name of the subject : subject 0, subject 1
+FINGER_NAME = 'flex_thumb_finger'                       # Name of the data file      - flex_baseline_finger -> 6 epochs
+NUM_EPOCHS = 30                                         # Number of epochs per experiment
 REST_DURATION = 3                                       # Rest duration (sec) during 1 trial
 ONSET_DURATION = 3                                      # ONSET duration (sec) during 1 trial
 REL_DURATION = 3                                        # Release duration (sec) during 1 trial
 TRIM_DURATION = 3                                       # Trim duration (sec) in the beginning and end of experiment
 MC_PORT = 'COM8'                                        # Define MC port
 EEG_PORT = 'COM9'                                       # Define EEG port
-EMG_SELECT_SENSORS = (4, 6)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
+EMG_SELECT_SENSORS = (0, 2)                             # EMG data channels. For EMG only: sensor1 = 0, sensor2 = 1, sensor3 = 2
 EMG_SAMPLES_PER_READ = 200                             # Samples per read for the EMG sensors
 MODES = {
     "MC _ _":    ["MC", "PRO"],

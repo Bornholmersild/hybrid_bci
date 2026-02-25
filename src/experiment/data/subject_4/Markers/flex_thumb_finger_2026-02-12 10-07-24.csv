@@ -88,5 +88,8 @@ time,marker_id,description
 255.0084938,10,Rest period started
 258.0084938,20,Action period started
 261.0084938,30,Release period started
-264.0089693,201,Trash data in the TRIM period
-267.0089693,202,Trash data in the TRIM period
+264.0087562,10,Rest period started
+267.0087562,20,Action period started
+270.0087562,30,Release period started
+273.0089693,201,Trash data in the TRIM period
+276.0089693,202,Trash data in the TRIM period

@@ -3,6 +3,9 @@ from matplotlib import pyplot as plt
 import numpy as np
 from scipy.signal import resample
 from scipy.ndimage import median_filter
+from pathlib import Path
+import json
+from scipy.ndimage import uniform_filter1d
 
 class Filtering:
     def __init__(self, fs=125.0):
@@ -207,7 +210,10 @@ class Filtering:
         data = np.asarray(data)
 
         if mode == "within_ch":
-            axis = 0
+            if data.ndim == 2:      # Z-score each channel independently when shape is (samples, channels)
+                axis = 0          
+            elif data.ndim == 3:
+                axis = (0, 1)       # Z-score each channel independently when shape is (epoch, samples, channels)
         elif mode == "across_ch":
             axis = None
         else:
@@ -287,6 +293,183 @@ class Filtering:
         
         return x_filt
     
+class RejectBadEpochs():
+    def __init__(self, base_dir : Path):
+        '''
+        Parameters
+        ----------
+        base_dir : Path
+            Dictionary to where the data lies (Usualy: 'experiments/data')
+        '''
+        self.base_dir = base_dir
+
+    def reject_routine(self,
+                       data_file_per_finger : list,
+                       epochs_overview : list,
+                       EEG_data : np.ndarray | None = None,
+                       RMS_data : np.ndarray | None = None,
+                       reject_config_dict : dict = None,
+                       EEG_useable_channels : list | None = None,
+                       ) -> np.ndarray:
+        '''
+        Automatic and manual rejection of bad epochs. \n
+        Parameters
+        ----------
+        data_file_per_finger : list
+            List of paths to the files for each finger. Used for manual rejection.\n
+            NOTE: Does not matter if EMG_files nor EEG_files. Use routine for different fingers
+
+        epochs_overview : list
+            List of number of epochs for each file. Used to convert continuous data into epochs and for manual rejection.
+
+        EEG_data : np.ndarray
+            Continuous EEG data after preprocessing. Shape (samples, channels)
+
+        RMS_data : np.ndarray
+            Continuous RMS data after preprocessing. Shape (samples, channels)
+
+        parameter_dict : dict
+            Dictionary with parameters for the rejection routine.\n
+            Should include keys:\n
+            'EEG_epoch_rejection_tolerance' -> peak-to-peak auto-rejection tolerance.\n
+            'EMG_epoch_rejection_tolerance' -> peak-to-peak auto-rejection tolerance.
+
+        EEG_useable_channels : list | None = None
+            List of ints, indicating which channels are of interest. 
+            NOTE: Bad epochs at other channels are not considered in the final decision
+
+        Returns
+        ----------
+        all_rejections_masks : np.ndarray of bools
+            Boolean mask with shape (total_epochs,). True for bad epochs, False for good epochs.
+        '''
+        if isinstance(data_file_per_finger, Path):
+            data_file_per_finger = [data_file_per_finger]
+        if EEG_useable_channels is None:
+            pass
+        elif isinstance(EEG_useable_channels, list):
+            EEG_data = EEG_data[:, EEG_useable_channels].copy()         # Extract data from selected channels
+        else:
+            raise ValueError(f'EEG_useable_channels is not of type list nor None. {type(EEG_useable_channels)}')
+        #===================#
+        # Convert to epochs #
+        #===================#
+        total_epochs = sum(epochs_overview)
+        EEG_epoch = EEG_data.reshape(total_epochs, EEG_data.shape[0] // total_epochs, EEG_data.shape[1]) if EEG_data is not None else None
+        RMS_epoch = RMS_data.reshape(total_epochs, RMS_data.shape[0] // total_epochs, RMS_data.shape[1]) if RMS_data is not None else None
+
+        EEG_tolerance = reject_config_dict['EEG_epoch_rejection_tolerance']
+        EMG_tolerance = reject_config_dict['EMG_epoch_rejection_tolerance']
+        EEG_bad_ch_acceptance = reject_config_dict['EEG_ch_acceptance']
+        EMG_bad_ch_acceptance = reject_config_dict['EMG_ch_acceptance']
+        # Include number of bad channels before its bad
+
+        st_epoch = 0
+        all_rejections_masks = []
+        
+        for file, num_epoch in zip(data_file_per_finger, epochs_overview):
+            print(f"\nFile: {file}")
+            EEG_autoreject = np.zeros(num_epoch, dtype=bool)   # Create np.ndarray of default false values corresponding to num_epochs size
+            RMS_autoreject = np.zeros(num_epoch, dtype=bool)   # Create np.ndarray of default false values corresponding to num_epochs size
+            
+            if EEG_epoch is not None:
+                EEG_autoreject = self.detect_bad_epochs_ptp(EEG_epoch[st_epoch : st_epoch + num_epoch], tolerance = EEG_tolerance, bad_ch_acceptance = EEG_bad_ch_acceptance)    
+            if RMS_epoch is not None:
+                RMS_autoreject = self.detect_bad_epochs_ptp(RMS_epoch[st_epoch : st_epoch + num_epoch], tolerance = EMG_tolerance, bad_ch_acceptance = EMG_bad_ch_acceptance)
+            if EEG_epoch is None and RMS_epoch is None:
+                raise ValueError('Input argument EEG_data and EMG_data is both none')
+
+            # CALL MANUAL REJECTION FUNCTION WITH THE AUTO-REJECTED EPOCHS AS INPUT
+            manualreject = self.detect_bad_epochs_manual(file, num_epoch)
+
+            autorejct_combined = EEG_autoreject | RMS_autoreject | manualreject
+
+            all_rejections_masks.append(autorejct_combined)
+            st_epoch += num_epoch
+        
+        all_rejections_masks = np.concatenate(all_rejections_masks, axis = 0)       # Concat along epoch axis
+        print('\n=====FUNC : reject_routine =====\n')
+        print(f'Final combined bad epoch indicies: {np.where(all_rejections_masks)[0]}')
+        print(f'Total bad epochs = {np.sum(all_rejections_masks)} out of {total_epochs}')
+
+        return all_rejections_masks
+    
+    def detect_bad_epochs_ptp(self, data : np.ndarray, tolerance : int = 6, bad_ch_acceptance = 1) -> np.ndarray:
+        """
+        Detect bad epochs based on peak-to-peak amplitude.
+        
+        Parameters
+        -----------
+        data : np.ndarray 
+            Epoch data with shape (n_epochs, n_times, n_channels)
+        tolerance : int 
+            Threshold multiplier for MAD. Higher k allows more tolerance
+
+        Returns
+        -----------
+        bad_mask : np.ndarray of bools 
+            A boolean mask with shape (n_epochs,). True for bad epochs, False for good epochs.
+        """
+        # Peak-to-peak per epoch per channel
+        ptp = np.ptp(data, axis=1)  # (epochs, channels)
+
+        # Robust threshold per channel
+        med = np.median(ptp, axis = 0)                    # (c_channels,)
+        mad = np.median(np.abs(ptp - med), axis = 0)      # (n_channels,) -> Purpose: Median Absolute Deviation (MAD) is a robust measure of variability that is less sensitive to outliers than standard deviation. It is calculated as the median of the absolute deviations from the median of the data. In this context, it provides a robust estimate of the variability in peak-to-peak values across epochs for each channel, which can be used to set a threshold for identifying bad epochs.
+
+        # Avoid zero MAD
+        mad[mad == 0] = 1e-12
+
+        # Define threshold for for each channels
+        threshold = med + tolerance * mad
+
+        # Epoch is bad if ANY channel exceeds its threshold. 
+        bad_mask = np.any(ptp > threshold, axis=1)
+
+        bad_indices = np.where(bad_mask)[0]
+        for idx in bad_indices:
+            bad_ch_sum = np.where(ptp[idx] > threshold)[0]
+            bad_ch_sum = bad_ch_sum.shape[0]
+            
+            if bad_ch_sum <= bad_ch_acceptance:
+                bad_mask[idx] = False
+
+        return bad_mask
+    
+    def detect_bad_epochs_manual(self, file : Path, num_epochs : int) -> np.ndarray:
+        '''
+        Detect bad epochs manually based on a JSON file.
+        
+        Parameters
+        ----------
+        file : Path
+            Path to the current file being processed
+        num_epochs : int
+            Number of epochs in the current file
+
+        Returns
+        ----------
+        bad_manual : np.ndarray of bools
+            Boolean mask indicating which epochs are manually marked as bad
+        '''
+        bad_epoch_files = self.base_dir / 'manual_bad_epochs.json'
+        
+        if not bad_epoch_files.exists():
+            raise FileNotFoundError(f'Manual bad epoch file not found at {bad_epoch_files}')
+        
+        subject = file.parents[1].name
+        filename = file.stem
+        key = f'{subject}_{filename}'
+
+        with open(bad_epoch_files, 'r') as f:
+            manual_json = json.load(f)                      # Load json file
+
+            manual = manual_json[key]                       # Search for key in json file
+            bad_manual = np.zeros(num_epochs, dtype=bool)   # Create np.ndarray of default false values corresponding to num_epochs size
+            
+            bad_manual[manual] = True                       # Convert indicies to True if mentioned in json file 
+        
+        return bad_manual
 
 class EEG_preprocessing(Filtering):
     def __init__(self, fs = 125,
@@ -300,7 +483,7 @@ class EEG_preprocessing(Filtering):
         "Fp1", "Fp2",   # frontal pole
         "C3",  "C4",    # central
         "T5",  "T6",    # temporal (posterior)
-        "O1",  "O2",    # occipital
+        "Cz",  "Fz",    # occipital
         "F7",  "F8",    # temporal (anterior)
         "F3",  "F4",    # frontal
         "T3",  "T4",    # temporal (mid)
@@ -478,23 +661,8 @@ class EEG_preprocessing(Filtering):
         # 3) TRIM #
         #=========#       
         EEG_trim = EEG_bandpass[trim_start : trim_end, :]
-        print(f"Original shape {EEG_bandpass.shape}\n"
-              f'EEG_trim shape: {EEG_trim.shape}\n')
-        
-        #===================================#
-        # 4) Common Average Reference - CAR #
-        #===================================#
-        #EEG_car = EEG_trim - np.mean(EEG_trim, axis = 1, keepdims = True)       # (S, C)
-
-        # FIND POWER OF SIGNAL
-        # power = np.abs(EEG_car) ** 2
-        #from scipy.signal import hilbert
-        #power = np.abs(hilbert(EEG_car, axis=0)) ** 2
-        
-        # --------------------------------------------------
-        # 5) Z-SCORE STANDARDIZATION
-        # --------------------------------------------------
-        #EEG_norm = EEG_filter_ins.zscore(EEG_trim, mode = 'within_ch')
+        # print(f"Original shape {EEG_bandpass.shape}\n"
+        #       f'EEG_trim shape: {EEG_trim.shape}\n')
 
         return EEG_trim, num_epochs
     
@@ -513,59 +681,6 @@ class EEG_preprocessing(Filtering):
 
         return signal[:, keep_idx], keep_idx
 
-    def preprocessing_routine_OLD(self,
-                            raw_eeg, 
-                            bandpass_lowcut = 2, 
-                            bandpass_highcut = 32,  
-                            num_epochs = 35, 
-                            trial_period = 9,
-                            **kwargs):
-        '''
-        Performs the full preprocessing routine:
-        1) Notch + Bandpass filter
-        2) Resample + z-score standardization + Secmentation into epochs
-
-        :param dict raw_eeg: This holds keys for a specfic class (finger). NOTE - If raw_eeg is a list, it will be converted to a dict with key 'single_class'. 2D array - Dim(samples, channels)
-        :param int bandpass_lowcut: Lowpass frequency
-        :param int bandpass_highcut: Highpass frequency
-        :param int num_channels: Number of activated channels
-        :param int num_epochs: Number of epochs (trials) in the dataset
-        :param int trial_period: Time of each epoch
-
-        :return dict EEG_norm: Dict with normalized continuous EEG data - EEG_norm[keys()](samples, channels)
-        :return dict EEG_epoch: Dict with epoched EEG data - EEG_epoch[keys()](epochs, samples_per_epoch, channels)
-        :return dict EEG_epoch_mean: Dict with mean over epochs - EEG_epoch_mean[keys()](samples_per_mean_epoch, channels)
-        '''
-        # For MRCP:     0.3 - 4 Hz
-        # For MU ERP:   6 - 13 Hz
-        # For BETA ERP: 14 - 30 Hz
-
-        # --------------------------------------------------
-        # 1) NOTCH + BANDPASS FILTER
-        # --------------------------------------------------
-
-        EEG_filter_ins = Filtering(fs = self.fs)
-
-        EEG_notch = EEG_filter_ins.notch(raw_eeg, cutoff = 50, Q = 30)
-        EEG_bandpass, _ = EEG_filter_ins.butter_bandpass(EEG_notch, lowcut = bandpass_lowcut, highcut = bandpass_highcut, order = 4)
-
-        # --------------------------------------------------
-        # 2) RESAMPLE + Z-SCORE STANDARDIZATION + EPOCHING
-        # --------------------------------------------------
-        # Iterate over each dict
-        n_samples, n_channels = EEG_bandpass.shape
-        total_time = num_epochs * trial_period                                # total time in seconds.
-        real_fs = n_samples / total_time           # Real frequency
-        target_len = int( np.round(n_samples  * (self.fs / real_fs)) )        # The correct number of samples for desired frequency
-            
-        EEG_resampled = resample(EEG_bandpass, target_len, axis=0)
-
-        EEG_norm = EEG_filter_ins.zscore(EEG_resampled)
-            
-        print(f'Total Time {total_time}\n Real fs: {real_fs} Hz\n Target len: {target_len}\n, Original len: {n_samples}')
-
-        return EEG_norm, num_epochs
-    
 class EMG_preprocessing(Filtering):
     def __init__(self,
                  fs = 2000,
@@ -597,6 +712,23 @@ class EMG_preprocessing(Filtering):
             rms_vals_all.append(rms_vals)
         return np.array(rms_vals_all).T
 
+    def rms_conv(self, signal, window_size=32, step_size=16):
+        '''
+        Convolution RMS. RMS = sqrt( LPF(x^2) ), where LPF is implemented as a uniform filter (moving average) over the squared signal.
+        '''
+        power = signal**2
+
+        mean_power = uniform_filter1d(
+            power,
+            size=window_size,
+            axis=0,
+            mode="nearest"
+        )
+
+        rms = np.sqrt(mean_power)
+
+        return rms[::step_size]
+    
     def preprocessing_routine(self,
                               raw_emg : np.ndarray,
                               rms_windowsize : int = 200,
@@ -647,9 +779,7 @@ class EMG_preprocessing(Filtering):
         # 3) TRIM #
         #=========#       
         EMG_trim = EMG_bandpass[trim_start : trim_end, :]
-        print(f"Original shape {EMG_bandpass.shape}\n"
-              f'EEG_trim shape: {EMG_trim.shape}\n')
-        
+
         # -----------------#
         # 4) Hampel filter #
         # -----------------#
@@ -658,37 +788,9 @@ class EMG_preprocessing(Filtering):
         # -------#
         # 5) RMS #
         # -------#
-        RMS_temp = self.sliding_rms(signal = EMG_hampel, window_size = rms_windowsize, step_size = rms_stepsize)
+        RMS = self.rms_conv(signal = EMG_hampel, window_size = rms_windowsize, step_size = rms_stepsize)
 
-        # ------------#
-        # 6) RESAMPLE #
-        # ------------#
-        total_time = num_epochs * self.trial_period                         # total time in seconds.
-        rms_samples = RMS_temp.shape[0]
-        real_fs = rms_samples / total_time                                  # Real frequency
-        ceil_fs = int( np.ceil(real_fs) )                                   # Get as close to the real fs
-        target_len = int( np.round(rms_samples  * (ceil_fs / real_fs)) )    # The correct number of samples for desired frequency
-
-        if rms_samples == target_len:
-            resample_temp = RMS_temp
-        else:
-            resample_temp = resample(RMS_temp, target_len, axis = 0)
-            print(f'Did resample from {rms_samples} to {target_len}')
-        
-        # -----------------#
-        # 7) Normalization #
-        # -----------------#
-        RMS_low, _ = EMG_filter_ins.lowpass_filter(resample_temp, cutoff = 10, order = 4)
-        
-        RMS = EMG_filter_ins.zscore(RMS_low, mode = 'across_ch')
-        EMG = EMG_filter_ins.zscore(EMG_hampel, mode = 'across_ch')
-
-        print(f'Total Time {total_time} s\n'
-            f'RMS fs: {real_fs} Hz\n'
-            f'RMS shape: {RMS.shape}\n'
-            f'EMG shape: {EMG.shape}\n')
-
-        return RMS, EMG, num_epochs
+        return RMS, EMG_hampel, num_epochs
 
 if '__main__' == __name__:
     pass

@@ -78,16 +78,74 @@
     "dominant_hand": "Right"
   },
 
-    "Subject8": {
-    "timestamp": "X",
-    "name": "X",
-    "gender": "X",
+    "Subject_7": {
+    "timestamp": "2026-02-18",
+    "name": "Cecilie",
+    "gender": "Female",
+    "age": 25,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right"
+  },
+  
+    "Subject_8": {
+    "timestamp": "2026-02-19",
+    "name": "Mathias",
+    "gender": "Male",
+    "age": 28,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right",
+    "NOTES" : "During index flex - Subject tends to bend/extend thumb. During middle thumb - Subject tends to bend index finger"
+  },
+  
+    "Subject_9": {
+    "timestamp": "2026-02-25",
+    "name": "Xiaofeng",
+    "gender": "Male",
+    "age": 43,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right",
+    "NOTES" : "None"
+  },
+  
+    "Subject_10": {
+    "timestamp": "",
+    "name": "",
+    "gender": "",
     "age": 0,
-    "neurological_disorder": "Parkinson",
-    "musculoskeletal_disorders": "Carpal tunnel/arthritis",
-    "hand_arm_injury": "what",
-    "dominant_hand": "X"
+    "neurological_disorder": "alzheimer, epilepsy, parkinson, stroke, migraine",
+    "musculoskeletal_disorders": "carpal tunnel syndrome, arhritis",
+    "hand_arm_injury": false,
+    "dominant_hand": "",
+    "NOTES" : "None"
+  },
+  
+    "Subject_11": {
+    "timestamp": "",
+    "name": "",
+    "gender": "",
+    "age": 0,
+    "neurological_disorder": "alzheimer, epilepsy, parkinson, stroke, migraine",
+    "musculoskeletal_disorders": "carpal tunnel syndrome, arhritis",
+    "hand_arm_injury": false,
+    "dominant_hand": "",
+    "NOTES" : "None"
+  },
+  
+    "Subject_12": {
+    "timestamp": "",
+    "name": "",
+    "gender": "",
+    "age": 0,
+    "neurological_disorder": "alzheimer, epilepsy, parkinson, stroke, migraine",
+    "musculoskeletal_disorders": "carpal tunnel syndrome, arhritis",
+    "hand_arm_injury": false,
+    "dominant_hand": "",
+    "NOTES" : "None"
   }
-  
-  
 }

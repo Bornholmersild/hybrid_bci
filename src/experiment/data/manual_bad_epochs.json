@@ -1,0 +1,75 @@
+{
+    "subject_0_flex_index_finger_2026-02-05 14-19-21": [],
+    "subject_0_flex_index_finger_2026-02-05 14-24-42": [],
+    "subject_0_flex_index_finger_2026-02-05 14-37-01": [],
+    
+    "subject_1_flex_index_finger_2026-02-06 10-32-15": [],
+    "subject_1_flex_index_finger_2026-02-06 10-39-19": [],
+    "subject_1_flex_index_finger_2026-02-06 10-48-03": [],
+    "subject_1_flex_index_finger_2026-02-06 10-55-45": [],
+
+    "subject_2_flex_index_finger_2026-02-02 09-50-42": [],
+    "subject_2_flex_index_finger_2026-02-02 10-00-46": [],
+    "subject_2_flex_index_finger_2026-02-02 10-08-52": [],
+    
+    "subject_3_flex_index_finger_2026-02-11 10-06-49": [],
+    "subject_3_flex_index_finger_2026-02-11 10-14-41": [],
+    "subject_3_flex_index_finger_2026-02-11 10-21-04": [],
+    "subject_3_flex_index_finger_2026-02-11 10-42-48": [],
+
+    "subject_4_flex_index_finger_2026-02-12 09-43-57": [],
+    "subject_4_flex_index_finger_2026-02-12 09-52-47": [],
+    "subject_4_flex_index_finger_2026-02-12 10-00-24": [],
+
+    "subject_5_flex_index_finger_2026-02-12 14-29-22": [],
+    "subject_5_flex_index_finger_2026-02-12 14-37-39": [],
+    "subject_5_flex_index_finger_2026-02-12 14-45-29": [14],
+
+    "subject_6_flex_index_finger_2026-02-17 09-49-23": [27],
+    "subject_6_flex_index_finger_2026-02-17 09-57-34": [],
+    "subject_6_flex_index_finger_2026-02-17 10-04-27": [],
+    
+    "subject_7_flex_index_finger_2026-02-18 13-00-27": [1],
+    "subject_7_flex_index_finger_2026-02-18 13-07-54": [],
+    "subject_7_flex_index_finger_2026-02-18 13-13-36": [],
+
+    "subject_8_flex_index_finger_2026-02-19 10-50-44": [],
+    "subject_8_flex_index_finger_2026-02-19 10-57-19": [],
+    "subject_8_flex_index_finger_2026-02-19 11-04-00": [],
+
+    "subject_0_flex_thumb_finger_2026-02-05 14-46-00": [14],
+    "subject_0_flex_thumb_finger_2026-02-05 14-51-56": [],
+    "subject_0_flex_thumb_finger_2026-02-05 14-57-32": [],
+
+    "subject_1_flex_thumb_finger_2026-02-06 10-59-29": [],
+    "subject_1_flex_thumb_finger_2026-02-06 11-08-40": [],
+    "subject_1_flex_thumb_finger_2026-02-06 11-17-39": [],
+
+    "subject_2_flex_thumb_finger_2026-02-02 10-15-53": [],
+    "subject_2_flex_thumb_finger_2026-02-02 10-24-41": [],
+    "subject_2_flex_thumb_finger_2026-02-02 10-30-25": [],
+
+    "subject_3_flex_thumb_finger_2026-02-11 10-26-34": [],
+    "subject_3_flex_thumb_finger_2026-02-11 10-32-26": [],
+    "subject_3_flex_thumb_finger_2026-02-11 10-37-41": [],
+
+    "subject_4_flex_thumb_finger_2026-02-12 10-07-24": [22],
+    "subject_4_flex_thumb_finger_2026-02-12 10-13-46": [],
+    "subject_4_flex_thumb_finger_2026-02-12 10-19-38": [25],
+
+    "subject_5_flex_thumb_finger_2026-02-12 14-53-24": [],
+    "subject_5_flex_thumb_finger_2026-02-12 15-01-15": [],
+    "subject_5_flex_thumb_finger_2026-02-12 15-06-27": [],
+
+    "subject_6_flex_thumb_finger_2026-02-17 10-10-06": [26, 27, 28, 29],
+    "subject_6_flex_thumb_finger_2026-02-17 10-18-04": [19],
+    "subject_6_flex_thumb_finger_2026-02-17 10-25-12": [2, 17],
+
+    "subject_7_flex_thumb_finger_2026-02-18 13-20-56": [],
+    "subject_7_flex_thumb_finger_2026-02-18 13-28-20": [],
+    "subject_7_flex_thumb_finger_2026-02-18 13-34-42": [],
+    
+    "subject_8_flex_thumb_finger_2026-02-19 11-13-00": [],
+    "subject_8_flex_thumb_finger_2026-02-19 11-20-59": [3],
+    "subject_8_flex_thumb_finger_2026-02-19 11-26-49": []
+}
