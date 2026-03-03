@@ -368,7 +368,7 @@ class RejectBadEpochs():
         all_rejections_masks = []
         
         for file, num_epoch in zip(data_file_per_finger, epochs_overview):
-            print(f"\nFile: {file}")
+            #print(f"\nFile: {file}")
             EEG_autoreject = np.zeros(num_epoch, dtype=bool)   # Create np.ndarray of default false values corresponding to num_epochs size
             RMS_autoreject = np.zeros(num_epoch, dtype=bool)   # Create np.ndarray of default false values corresponding to num_epochs size
             

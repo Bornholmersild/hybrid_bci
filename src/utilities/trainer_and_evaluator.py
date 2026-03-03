@@ -14,6 +14,9 @@ class FusionNet_train_eval():
 
         :return avg_loss : float
         '''
+        # Make sure gradient tracking is on, and do a pass over the data
+        model.train()
+
         running_loss = 0.0
 
         for eeg, emg, lab in train_loader:
@@ -40,12 +43,12 @@ class FusionNet_train_eval():
 
         return avg_loss
 
-    def evaluate_one_epoch(self, model, test_loader, criterion, device):
+    def validation_one_epoch(self, model, val_loader, criterion, device):
         '''
         Docstring for evaluate_one_epoch
 
         :param model: Provide the model to be evaluated
-        :param test_loader: Provide the dataloader for testing
+        :param val_loader: Provide the dataloader for testing
         :param criterion: Loss function
         :param device: Device to run the evaluation on (CPU or GPU)
 
@@ -55,6 +58,9 @@ class FusionNet_train_eval():
         vcorrect = 0
         vtotal = 0
 
+        # Set the model to evaluation mode
+        model.eval()
+
         L_list = []
         C_list = []
         W_list = []
@@ -62,7 +68,7 @@ class FusionNet_train_eval():
 
         # Disable gradient computation and reduce memory consumption.
         with torch.no_grad():
-            for eeg, emg, lab in test_loader:
+            for eeg, emg, lab in val_loader:
                 veeg, vemg, vlabels = eeg.to(device), emg.to(device), lab.to(device)
 
                 # Forward pass: compute predicted outputs by passing inputs to the model
@@ -83,7 +89,7 @@ class FusionNet_train_eval():
                 vtotal += vlabels.size(0)
                 vcorrect += (vpredicted == vlabels).sum().item()
 
-        avg_vloss = running_vloss / len(test_loader) # loss per batch
+        avg_vloss = running_vloss / len(val_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal
         return avg_vloss, vacc, [L_list, C_list, W_list, Y_list]
     
@@ -100,6 +106,10 @@ class SingleNet_train_eval():
 
         :return avg_loss : float
         '''
+        
+        # Make sure gradient tracking is on, and do a pass over the data
+        model.train()
+
         running_loss = 0.0
 
         for inp, lab in train_loader:
@@ -126,12 +136,12 @@ class SingleNet_train_eval():
 
         return avg_loss
 
-    def evaluate_one_epoch(self, model, test_loader, criterion, device):
+    def validaton_one_epoch(self, model, val_loader, criterion, device):
         '''
         Docstring for evaluate_one_epoch
 
         :param model: Provide the model to be evaluated
-        :param test_loader: Provide the dataloader for testing
+        :param val_loader: Provide the dataloader for testing
         :param criterion: Loss function
         :param device: Device to run the evaluation on (CPU or GPU)
 
@@ -141,6 +151,9 @@ class SingleNet_train_eval():
         vcorrect = 0
         vtotal = 0
 
+        # Set the model to evaluation mode
+        model.eval()
+
         # L_list = []
         # C_list = []
         # W_list = []
@@ -148,11 +161,11 @@ class SingleNet_train_eval():
 
         # Disable gradient computation and reduce memory consumption.
         with torch.no_grad():
-            for inp, lab in test_loader:
+            for inp, lab in val_loader:
                 vinputs, vlabels = inp.to(device), lab.to(device)
 
                 # Forward pass: compute predicted outputs by passing inputs to the model
-                vlogits, context, attn_weight = model(vinputs)
+                vlogits, _, _ = model(vinputs)
 
                 # L_list.append(vlogits.cpu())
                 # C_list.append(context.cpu())
@@ -169,6 +182,95 @@ class SingleNet_train_eval():
                 vtotal += vlabels.size(0)
                 vcorrect += (vpredicted == vlabels).sum().item()
 
-        avg_vloss = running_vloss / len(test_loader) # loss per batch
+        avg_vloss = running_vloss / len(val_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal
         return avg_vloss, vacc, None#[L_list, C_list, W_list, Y_list]
+
+    def inference_one_epoch(self, model, test_loader, criterion, device):
+        """
+        Final model evaluation on the TEST dataset.
+
+        IMPORTANT:
+        - This function must be called ONLY once after training
+        and hyperparameter optimization are finished.
+        - No model updates occur here.
+        - Used to report final thesis performance.
+
+        Parameters
+        ----------
+        model : torch.nn.Module
+            Trained model to evaluate.
+
+        test_loader : DataLoader
+            DataLoader containing ONLY unseen test data.
+
+        criterion : loss function
+            Same loss used during training.
+
+        device : torch.device
+            CPU or GPU.
+
+        Returns
+        -------
+        avg_test_loss : float
+            Average loss across all batches.
+
+        test_acc : float
+            Classification accuracy in percentage.
+
+        all_preds : np.ndarray
+            Predicted class labels.
+
+        all_labels : np.ndarray
+            Ground truth labels.
+        """
+
+        # Put model in evaluation mode
+        model.eval()
+
+        running_loss = 0.0
+        correct = 0
+        total = 0
+
+        # Store predictions for later analysis
+        all_preds = []
+        all_labels = []
+
+        # Disable gradient computation (saves memory + faster)
+        with torch.no_grad():
+
+            for inputs, labels in test_loader:
+
+                # Move batch to device
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                # Forward pass
+                logits, _, _ = model(inputs)
+
+                # Compute loss
+                loss = criterion(logits, labels)
+                running_loss += loss.item()
+
+                # Predicted class index
+                _, predicted = torch.max(logits, dim=1)
+
+                # Accuracy statistics
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+                # Store outputs for confusion matrix etc.
+                all_preds.append(predicted.cpu())
+                all_labels.append(labels.cpu())
+
+        # -----------------------------------
+        # Final metrics
+        # -----------------------------------
+        avg_test_loss = running_loss / len(test_loader)
+        test_acc = 100 * correct / total
+
+        # Concatenate stored tensors
+        all_preds = torch.cat(all_preds).numpy()
+        all_labels = torch.cat(all_labels).numpy()
+
+        return avg_test_loss, test_acc, all_preds, all_labels

@@ -3,32 +3,38 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import Subset
 import sherpa
 
 # Manage datasets
 import numpy as np
-import pandas as pd
 
 # Manage utils
 import os 
 from pathlib import Path
 from datetime import datetime
+import logging                  # Avoid loggings from GP
+from copy import deepcopy       # Used for copy model_state
+import time
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
 from src.utilities.trainer_and_evaluator import FusionNet_train_eval, SingleNet_train_eval
 from src.utilities.load_and_visualize_data import load_datasets
 
+# Avoid messages for sherpa
+logging.getLogger("GP").setLevel(logging.CRITICAL)
+logging.getLogger("GPy").setLevel(logging.CRITICAL)
+
 #==================#
 # Global variables #
 #==================#
 EMG_FREQ = 2000
 EEG_FREQ = 125
+RMS_FREQ = 40                   # 40 for 500 samples, 125 for 32 samples (window)
 
 EMG_LOWCUT = 20
 EMG_HIGHCUT = 450
-EEG_LOWCUT = 0.05
+EEG_LOWCUT = 0.5
 EEG_HIGHCUT = 32
 
 EEG_NUM_CH = 3
@@ -37,6 +43,12 @@ EEG_NUM_CH = 16
 TRIAL_PERIOD = 9
 TRIM_PERIOD = 3
 
+RMS_SAMPLING_WINDOW = 500           # 500 samples - 250 ms                      32 samples - 16 ms                                       
+RMS_WINDOW_STEPSIZE = 50            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
+
+HAMPEL_WINDOWSIZE = 100
+HAMPEL_SIGMA = 2
+
 EEG_USEABLE_CHANNELS = [2, 3, 6, 7, 10, 11]
 
 SEED = 42
@@ -44,10 +56,10 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 
 EMG_CONFIG_DICT = {
-    'rms_windowsize' : 32,
-    'rms_stepsize' : 16,
-    'hampel_windowsize' : 100,
-    'hampel_sigma' : 2.0,
+    'rms_windowsize' : RMS_SAMPLING_WINDOW,
+    'rms_stepsize' : RMS_WINDOW_STEPSIZE,
+    'hampel_windowsize' : HAMPEL_WINDOWSIZE,
+    'hampel_sigma' : HAMPEL_SIGMA,
     'hampel_plot_option' : [False, None],
     'include_EMG' : False
 }
@@ -198,25 +210,10 @@ class SingleManageDataset(torch.utils.data.Dataset):
         # Convert to tensors
         self.data = torch.tensor(data, dtype=torch.float32)
         self.labels = torch.tensor(labels, dtype=torch.long)
-        self.rng = np.random.default_rng(SEED)
 
         print('data shape:', self.data.shape)
         print('labels shape:', self.labels.shape)
-    
-    def create_test_train_dataset(self, train_procent = 0.8):
-        '''
-        Return:
-            train_dataset - 
-            test_dataset -
-        '''
-        N_labels = len(self.labels)
-        indices = self.rng.permutation(N_labels)            # Shuffle labels
-        
-        train_size = int(train_procent * N_labels)
-        train_idx = indices[:train_size]
-        test_idx  = indices[train_size:]
-
-        return train_idx, test_idx
+        print()
     
     def __len__(self):
         return len(self.labels)
@@ -238,21 +235,196 @@ class MultiManageDataset(torch.utils.data.Dataset):
         print('emg shape:', self.emg.shape)
         print('labels shape:', self.labels.shape)
     
-    def create_test_train_dataset(self, train_procent = 0.8):
-        N_labels = len(self.labels)
-        indices = self.rng.permutation(N_labels)            # Shuffle labels
-        
-        train_size = int(train_procent * N_labels)
-        train_idx = indices[:train_size]
-        test_idx  = indices[train_size:]
-
-        return train_idx, test_idx
-    
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
         return self.eeg[idx], self.emg[idx], self.labels[idx]
+
+class Manage3Split:
+    '''
+    Functionality for splitting continous data into train-validation-test split and\n
+    segment trial into rest, contract and release data
+    '''
+    def __init__(self, seed : int):
+        '''
+        Parameter
+        ---------
+        seed : int
+            For np.random generator
+        '''
+        self.rng = np.random.default_rng(seed)
+
+    def build_split(self, 
+                    epoch_index : np.ndarray,
+                    epoch_thumb : np.ndarray,
+                    index_trials_indices : list,
+                    thumb_trials_indices : list,
+                    fs : int) -> tuple[np.ndarray, np.ndarray]:
+        '''
+        Provides a dataset and labels with 5 classes for the train-validation-test split
+
+        Parameters
+        ----------
+        epoch_index : np.ndarray
+            Epoch data for either EEG or EMG for index motion
+        
+        epoch_thumb : np.ndarray
+            Epoch data for either EEG or EMG for thumb motion
+
+        index_trials_indices : list
+            Indices for a specfic split (index). Provided by split_trials function
+
+        thumb_trials_indices : list
+            Indices for a specfic split (thumb). Provided by split_trials function
+        
+        fs : int
+            Sampling frequency
+
+        Returns
+        ----------
+        X : np.ndarray
+            Dataset split for either train, validation or test with all 5 classes
+        
+        y : np.ndarray
+            Corresponding labels
+        '''
+        
+        # Select trials
+        index_sel = epoch_index[index_trials_indices]
+        thumb_sel = epoch_thumb[thumb_trials_indices]
+
+        # Segment
+        rest_i, contract_i, release_i = self._segment_trials(index_sel, fs)
+        rest_t, contract_t, release_t = self._segment_trials(thumb_sel, fs)
+
+        # Build features
+        X = np.concatenate([
+            contract_i,
+            release_i,
+            contract_t,
+            release_t,
+            np.concatenate([rest_i, rest_t])
+        ])
+
+        # Build labels
+        y = np.concatenate([
+            np.zeros(len(contract_i)),                    # 0 index_contract
+            np.ones(len(release_i)),                      # 1 index_release
+            np.full(len(contract_t), 2),                  # 2 thumb_contract
+            np.full(len(release_t), 3),                   # 3 thumb_release
+            np.full(len(rest_i)+len(rest_t), 4)           # 4 rest
+        ])
+
+        return X, y
+
+    def split_trials(self, num_trials : int, train_ratio : int = 0.7) -> tuple[list, list, list]:
+        '''
+        Provide indices for a train-validation-test split. Used per finger motion
+
+        Parameters
+        ----------
+        num_trials : int
+            Number of trials per finger motion
+
+        train_ratio : int = 0.7
+            Percent ratio for train split
+        
+        val_ratio : int = 0.15
+            Percent ratio for validation and test split
+        
+        Returns
+        ----------
+        train_idx : list
+            Indices for train split 
+        
+        val_idx : list
+            Indices for validation split
+        
+        test_idx : list
+            Indices for test split
+        '''
+        indices = self.rng.permutation(num_trials)
+
+        n_train = int(train_ratio * num_trials)
+        n_remain = (num_trials - n_train) // 2          # Split test and val equally 
+
+        train_idx = indices[:n_train]
+        val_idx   = indices[n_train : n_train + n_remain]
+        test_idx  = indices[n_train + n_remain:]
+
+        print(f'Train split indicies {train_idx.shape}\n',
+              f'Valdiation split indicies {val_idx.shape}\n',
+              f'Test split indicies {test_idx.shape}\n')
+
+        return train_idx, val_idx, test_idx
+
+    def _segment_trials(self, trials : np.ndarray, fs : int) -> tuple[list, list, list]:
+        """
+        Convert the split data into 3 classes
+
+        Parameters
+        ----------
+
+        trials : np.ndarray
+            Splited data of shape (num_trials, total_samples, channels)
+        
+        Returns
+        ---------
+        rest, contract, release : list
+            Segment trial into the 3 classes
+        """
+
+        rest     = trials[:, :3*fs, :]
+        contract = trials[:, 3*fs:6*fs, :]
+        release  = trials[:, 6*fs:, :]
+
+        return rest, contract, release
+
+class ExperimentLogger:
+
+    def __init__(self, save_path : Path):
+        self.save_path = save_path / 'SHERPA_results.pt'
+        
+        # Load existing file if present
+        if os.path.exists(save_path):
+            self.results = torch.load(save_path)
+        else:
+            self.results = {"trials": []}
+
+    def log_trial(
+        self,
+        trial_id,
+        hyperparams,
+        best_epoch,
+        train_loss,
+        val_loss,
+        val_acc,
+        test_loss,
+        test_acc,
+        preds,
+        labels):
+        """
+        Append one trial result.
+        """
+
+        trial_result = {
+            "trial_id": trial_id,
+            "hyperparameters": hyperparams,
+            "best_epoch": best_epoch,
+            "training_loss": train_loss,
+            "validation_loss": val_loss,
+            "validation_accuracy": val_acc,
+            "test_loss": test_loss,
+            "test_accuracy": test_acc,
+            "predictions": preds,
+            "labels": labels
+        }
+
+        self.results["trials"].append(trial_result)
+
+        # Save immediately (safe against crashes)
+        torch.save(self.results, self.save_path)
 
 def load_EMG_and_EEG_data(subject_name : str | list, EEG_useable_channels : list | None = None):
     base_dir = Path().resolve().parent / 'experiment/data'
@@ -311,8 +483,47 @@ def load_EMG_and_EEG_data(subject_name : str | list, EEG_useable_channels : list
     # Add car
     # Add normalazation
 
+def load_EEG_data(subject_name : str | list, finger_name : str):
+    base_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+
+    load_ins = load_datasets(base_dir = base_dir)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    reject_ins = RejectBadEpochs(base_dir = base_dir)
+
+    EEG_files = load_ins.find_flex_files(
+        subjects = subject_name,
+        modality = "EEG",
+        fingers = finger_name,
+        prefix = 'flex'
+    )
+
+    EEG, epochs_overview = load_ins.load_datasets_EEG(
+        path_to_data_files = EEG_files,
+        preprocessing_func = EEG_ins.preprocessing_routine,
+    )
+
+    # Should be in sherpa loop 
+    reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files,
+                                            epochs_overview = epochs_overview,
+                                            EEG_data = EEG,
+                                            RMS_data = None,
+                                            reject_config_dict = REJECT_CONFIG_DICT,
+                                            EEG_useable_channels = None)
+
+    total_epochs = sum(epochs_overview)
+    EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
+
+    EEG_epoch_clean = EEG_epoch[~reject_mask]
+
+    EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
+
+    filt_ins = Filtering()
+    EEG_epoch_norm = filt_ins.zscore(EEG_car, mode = 'within_ch')
+
+    return EEG_epoch_norm, epochs_overview
+
 def load_EMG_data(subject_name : str | list, finger_name : str):
-    base_dir = Path().resolve() / 'src/experiment/data'
+    base_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
 
     load_ins = load_datasets(base_dir = base_dir)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
@@ -331,15 +542,13 @@ def load_EMG_data(subject_name : str | list, finger_name : str):
         EMG_config_dict = EMG_CONFIG_DICT
     )
 
-    # Should be in sherpa loop
+    # Should be in sherpa loop 
     reject_mask = reject_ins.reject_routine(data_file_per_finger = EMG_files,
                                             epochs_overview = epochs_overview,
                                             EEG_data = None,
                                             RMS_data = RMS,
                                             reject_config_dict = REJECT_CONFIG_DICT,
                                             EEG_useable_channels = None)
-
-    
 
     total_epochs = sum(epochs_overview)
     RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, RMS.shape[1])
@@ -354,71 +563,125 @@ def load_EMG_data(subject_name : str | list, finger_name : str):
 
     return RMS_epoch_norm, EMG_epoch_norm
 
-def prepare_classes_single_sensor(epoch_data_class1, epoch_data_class2, fs = 125):
+def build_optimizer(model_params, trial_parameters):
+    hp = trial_parameters
+    opt_name = hp["optimizer"]
+    lr = float(hp["learning_rate"])
+    wd = float(hp["weight_decay"])
 
-    # Segment for class 1
-    rest_period_class1 = epoch_data_class1[:, :3*fs, :].copy()
-    contract_period_class1 = epoch_data_class1[:, 3*fs : 6*fs, :].copy()
-    release_period_class1 = epoch_data_class1[:, 6*fs:, :].copy()
+    if opt_name == "adamw":
+        # AdamW: decoupled weight decay
+        return torch.optim.AdamW(model_params, lr=lr, weight_decay=wd)
 
-    # Segment for class 2
-    rest_period_class2 = epoch_data_class2[:, :3*fs, :].copy()
-    contract_period_class2 = epoch_data_class2[:, 3*fs : 6*fs, :].copy()
-    release_period_class2 = epoch_data_class2[:, 6*fs:, :].copy()
+    elif opt_name == "sgd_momentum":
+        mom = float(hp["momentum"])
+        nes = bool(hp["nesterov"])
+        # SGD: in PyTorch this is classic L2-style weight decay, which is fine/equivalent for SGD
+        return torch.optim.SGD(model_params, lr=lr, momentum=mom, nesterov=nes, weight_decay=wd)
 
-    rest_concat = np.concatenate( (rest_period_class1,
-                                   rest_period_class2))
-
-    X = np.concatenate( (contract_period_class1,
-                         release_period_class1,
-                         contract_period_class2,
-                         release_period_class2,
-                         rest_concat))
-
-    labels = np.concatenate( (np.zeros(contract_period_class1.shape[0]), 
-                            np.ones(release_period_class1.shape[0]),
-                            np.ones(contract_period_class2.shape[0]) + 1,
-                            np.ones(release_period_class2.shape[0]) + 2,
-                            np.ones(rest_concat.shape[0]) + 3)
-                            )
+    raise ValueError(f"Unknown optimizer: {opt_name}")
     
-    return X, labels
-    
-
 def load_classfication(subject_name : str | list):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # print(f"Using device: {device}")
-
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
-    # print("Pin memory set to:", pin_memory)
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
 
-    LOG_NAME = f'{subject_name}_SingleNet_EMG_5classes'
-    log_dir = os.path.abspath(os.path.join(os.getcwd(), f'loggings\{LOG_NAME}'))    # Path to log results
+    LOG_NAME = f'{subject_name}_SingleNet_EEG'
+    log_dir = Path(__file__).resolve().parent / f'loggings/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    logger = ExperimentLogger(save_path = log_dir)
 
     #===========#
     # Load data #
     #===========#
-    RMS_index, _ = load_EMG_data(subject_name = subject_name, finger_name = 'index')
-    RMS_thumb, _ = load_EMG_data(subject_name = subject_name, finger_name = 'thumb')
+    X_epoch_index, _ = load_EEG_data(subject_name = subject_name, finger_name = 'index')
+    X_epoch_thumb, _ = load_EEG_data(subject_name = subject_name, finger_name = 'thumb')
+    FREQ = EEG_FREQ
+    print(X_epoch_index.shape, X_epoch_thumb.shape)
 
-    X, labels = prepare_classes_single_sensor(epoch_data_class1 = RMS_index, epoch_data_class2 = RMS_thumb)
+    split_ins = Manage3Split(seed = SEED)
 
+    num_index_trials = X_epoch_index.shape[0]
+    num_thumb_trials = X_epoch_thumb.shape[0]
+
+    train_i, val_i, test_i = split_ins.split_trials(num_index_trials)
+    train_t, val_t, test_t = split_ins.split_trials(num_thumb_trials)
+
+    X_train, y_train = split_ins.build_split(epoch_index = X_epoch_index,
+                                            epoch_thumb = X_epoch_thumb,
+                                            index_trials_indices = train_i,
+                                            thumb_trials_indices = train_t,
+                                            fs = FREQ)
+    X_val, y_val = split_ins.build_split(epoch_index = X_epoch_index,
+                                            epoch_thumb = X_epoch_thumb,
+                                            index_trials_indices = val_i,
+                                            thumb_trials_indices = val_t,
+                                            fs = FREQ)
+    X_test, y_test = split_ins.build_split(epoch_index = X_epoch_index,
+                                            epoch_thumb = X_epoch_thumb,
+                                            index_trials_indices = test_i,
+                                            thumb_trials_indices = test_t,
+                                            fs = FREQ)
+    
+
+    #=======================#
+    # Multi fusion datasets #
+    #=======================#
+    # ...
+
+    #=================#
+    # Single datasets #
+    #=================#
+    train_eval_ins = SingleNet_train_eval()
+
+    print('Training dataset shapes:')
+    train_dataset_ins = SingleManageDataset(X_train, y_train)
+    print('Validation dataset shapes:')
+    val_dataset_ins = SingleManageDataset(X_val, y_val)
+    print('Testing dataset shapes:')
+    test_dataset_ins = SingleManageDataset(X_test, y_test)
+
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    DATA_CH = X_epoch_index.shape[2]
+    NUM_CLASSES = 5
+    NUM_EPOCHS = 200                 # 150 - 200
+    PATIENCE = 25                   # Early stopping patience - 25
+    WHICH_NETWORK = 'SingleNet'     # SingleNet or FusionNet -> Used to adjust model_args for torch.save model
+
+    # Used with FusionNet
+    EEG_CH = 0
+    EMG_CH = 0
+
+    assert str.lower(WHICH_NETWORK) in ["singlenet", "fusionnet"], \
+    f"Invalid WHICH_NETWORK: {WHICH_NETWORK}"
 
     #====================================#
     # SHERPA Hyperparameter Optimazation #
     #====================================#
-    parameters = [sherpa.Continuous(name='learning_rate', range=[0.0001, 0.001], scale='log'),
-              sherpa.Continuous(name='dropout', range=[0., 0.4]),
+
+    parameters = [sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
+              sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
               sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
-              sherpa.Discrete(name='num_hidden_units', range=[32, 64]),         # before 64
+              sherpa.Discrete(name='num_hidden_units', range=[32, 256]),         # before 256
               sherpa.Choice(name='activation', range=['relu', 'elu']),
-              sherpa.Ordinal(name='lstm_layers', range=[1, 3])]
-
-    # Hyperparameter optimization algorithms
-    max_num_trials = 100
-    algorithm = sherpa.algorithms.RandomSearch(max_num_trials = max_num_trials)
-
+              sherpa.Ordinal(name='lstm_layers', range=[1, 3]),
+              sherpa.Choice(name="optimizer", range=["adamw", "sgd_momentum"]),
+              sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
+              sherpa.Continuous(name="momentum", range=[0.7, 0.99]),   # only used for SGD
+              sherpa.Choice(name="nesterov", range=[False, True]),     # only used for SGD])
+    ]
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = 20                 # Number of hyperparameter configurations before model learns
+    )
     # Study represents the hyperparameter optimization itself
     study = sherpa.Study(
         parameters = parameters,
@@ -427,36 +690,12 @@ def load_classfication(subject_name : str | list):
         disable_dashboard = True
     )
 
-    #=======================#
-    # Multi fusion datasets #
-    #=======================#
-    # dataset_ins = MultiManageDataset(EEG_X, EMG_X, labels)
-    # train_eval_ins = FusionNet_train_eval()
-
-    #=================#
-    # Single datasets #
-    #=================#
-    dataset_ins = SingleManageDataset(data = X, labels = labels)
-    train_eval_ins = SingleNet_train_eval()
-
-    #========================================================#
-    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
-    #========================================================#
-    DATA_CH = X.shape[2]
-    NUM_CLASSES = 5
-
-    train_idx, test_idx = dataset_ins.create_test_train_dataset(train_procent = 0.8)
-
-    num_epochs = 200
-    patience = 40                   # Early stopping patience - 25
-
     for trial in study:
-        lr = trial.parameters['learning_rate']
         dropout = trial.parameters['dropout']       
         batch_size = trial.parameters['batch_size']
         num_hidden_units = trial.parameters['num_hidden_units']
         activation = trial.parameters['activation'] 
-        lstm_layers = trial.parameters['lstm_layers']
+        lstm_layers = trial.parameters['lstm_layers']     # trial.parameters['lstm_layers']
 
         #=======================#
         # Multi fusion datasets #
@@ -467,19 +706,21 @@ def load_classfication(subject_name : str | list):
         # Single datasets #
         #=================#
         model = SingleNet(data_ch = DATA_CH, hidden = num_hidden_units, lstm_layers = lstm_layers, num_classes = NUM_CLASSES, dropout = dropout, activation = activation)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr = lr)
 
-        # Make a subset of data with desired indicies
-        train_dataset = Subset(dataset_ins, train_idx)
-        test_dataset  = Subset(dataset_ins, test_idx)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = build_optimizer(model_params = model.parameters(), trial_parameters = trial.parameters)
 
         # DataLoaders (update batch_size)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=pin_memory, num_workers=0)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, pin_memory=pin_memory, num_workers=0)
-        
-        best_vloss = float('inf')
-        best_vacc = 0.0
+        train_loader = DataLoader(train_dataset_ins, batch_size = batch_size, shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(val_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(test_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+
+        best_train_loss = None
+        best_val_loss = float("inf")
+        best_val_acc = None
+
+        best_epoch = 0
+        best_state_dict = None
         early_stopping_counter = 0
 
         # Create log folder
@@ -487,67 +728,47 @@ def load_classfication(subject_name : str | list):
         os.makedirs(log_folder, exist_ok=False)
         writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
 
-        for epoch in range(num_epochs):
-            #print('EPOCH {}/{} at trial {}/{}:'.format(epoch + 1, num_epochs, trial.id, max_num_trials))
-
-            # Make sure gradient tracking is on, and do a pass over the data
-            model.train(True)
+        for epoch in range(NUM_EPOCHS):
 
             # Train model
-            avg_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
+            avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
 
-            # Set the model to evaluation mode
-            model.eval()
-
-            avg_vloss, vacc, _ = train_eval_ins.evaluate_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
-
-            #print('LOSS train {} valid {} and accuracy {}'.format(avg_loss, avg_vloss, vacc))
+            # Validate model
+            avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
-            writer.add_scalars('Loss', { 'Training' : avg_loss, 'Validation' : avg_vloss }, epoch + 1)
+            writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
             writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
             writer.flush()
 
             study.add_observation(trial = trial,
                                 iteration = epoch,
-                                objective = avg_vloss,
-                                context={'avg_train_loss': avg_loss})
+                                objective = avg_vloss)
 
-            
             # Track best performance, and save the model's state
-            if best_vacc < vacc:
-                best_vacc = vacc
+            if avg_vloss < best_val_loss:
+                best_val_loss = avg_vloss
+                best_epoch = epoch
 
-            if avg_vloss < best_vloss:
-                best_vloss = avg_vloss
+                best_state_dict = deepcopy(model.state_dict())
+                best_optimizer_dict = deepcopy(optimizer.state_dict())
+ 
+                best_train_loss = avg_train_loss
+                best_val_acc = vacc
+
                 early_stopping_counter = 0
-                # print("New best model found at epoch {} with validation loss: {:.4f}".format(epoch + 1, avg_vloss))
-                
-                if vacc > 60:
-                    torch.save({
-                        "model_state": model.state_dict(),
-                        "accuracy": best_vacc,
-                        "model_args": {
-                            "data_ch": DATA_CH,
-                            "hidden": num_hidden_units,
-                            "lstm_layers": lstm_layers,
-                            "num_classes": NUM_CLASSES,
-                            "dropout": dropout,
-                            "activation": activation,}}, r'{}\model.pth'.format(log_folder))
-                    # print('model saved')
 
             else:
                 early_stopping_counter += 1
-                # print("Early stopping counter: {}/{}".format(early_stopping_counter, patience))
 
-                if early_stopping_counter >= patience:
-                    # print("Early stopping triggered after {} epochs without improvement.".format(early_stopping_counter))
+                if early_stopping_counter >= PATIENCE:
                     break
+
             print(
                 f'{subject_name} | '
-                f'Trial {trial.id}/{max_num_trials} | '
-                f'Epoch {epoch+1}/{num_epochs} | '
-                f'Train {avg_loss:.4f} | '
+                f'Trial {trial.id}/{MAX_NUM_TRIALS} | '
+                f'Epoch {epoch+1}/{NUM_EPOCHS} | '
+                f'Train {avg_train_loss:.4f} | '
                 f'Val {avg_vloss:.4f} | '
                 f'Acc {vacc:.2f} |',
                 f'Early stopping {early_stopping_counter}',
@@ -555,35 +776,51 @@ def load_classfication(subject_name : str | list):
                 flush=True
             )
 
+        model.load_state_dict(best_state_dict)
+
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
+
+        if str.lower(WHICH_NETWORK) == 'singlenet':
+            model_arg = {
+                "data_ch": DATA_CH,
+                "hidden": num_hidden_units,
+                "lstm_layers": lstm_layers,
+                "num_classes": NUM_CLASSES,
+                "dropout": dropout,
+                "activation": activation,}
+        elif str.lower(WHICH_NETWORK) == 'fusionnet':
+            model_arg = {
+                "eeg_ch": EEG_CH,
+                "emg_ch": EMG_CH,
+                "hidden": num_hidden_units,
+                "lstm_layers": lstm_layers,
+                "num_classes": NUM_CLASSES,
+                "dropout": dropout,
+                "activation": activation,}
+            
+        torch.save({
+            "model_state": best_state_dict,
+            "model_args": model_arg, 
+            "optimizer_state_dict": best_optimizer_dict,
+            "hyperparameters": trial.parameters,}, 
+            r'{}\model.pth'.format(log_folder))
+        
+        logger.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = best_epoch,
+            train_loss = best_train_loss,
+            val_loss = best_val_loss,
+            val_acc = best_val_acc,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+
         writer.close()
-        study.save(log_dir)
         study.finalize(trial, status = 'COMPLETED')
 
-    #----------------------------------------------------#
-    # Document results from study trials and best version
-    #----------------------------------------------------#
-    df = pd.read_csv(f"{log_dir}\\results.csv")
-    best = study.get_best_result()
-
-    summary_row = {
-        "Trial-ID" : best['Trial-ID'],
-        "Status" : "BEST",
-        'Iteration' : best['Iteration'],
-        'activation' : best['activation'],
-        'batch_size' : best['batch_size'],
-        'dropout' : best['dropout'],
-        'learning_rate' : best['learning_rate'],
-        'num_hidden_units' : best['num_hidden_units'],
-        'lstm_layers' : best['lstm_layers'],
-        "Objective" : best['Objective'],
-        "avg_train_loss" : best['avg_train_loss'],
-    }
-
-    df_new = pd.concat([pd.DataFrame([summary_row]), df], ignore_index=True)
-    df_new.to_csv(f"{log_dir}\\results.csv", index=False)
-
 def main():
-    import time
     t0 = time.time()
     subjects = ['subject_0']
 
@@ -592,6 +829,66 @@ def main():
 
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
+
+def inspect_model():
+    logging_name = 'subject_10_SingleNet_EMG'
+    sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
+
+    if not os.path.exists(sherpa_info_path):
+        raise FileExistsError(sherpa_info_path)
+    data = torch.load(sherpa_info_path, weights_only=False)
+
+    # print(data['trials'][57])
+    acc_list = []
+    for acc in data['trials']:
+        acc_list.append(acc['test_accuracy'])
     
+    acc_list.sort(reverse=True)
+    for i, acc in enumerate(acc_list):
+        print(i, acc)
+    
+    best = min(
+        data["trials"],
+        key=lambda x: x["validation_loss"]
+    )
+    # print(best)
+    print()
+    # print(data['trials'][39])
+    print()
+    print('Best trial ID: ', best['trial_id'])
+    print('Stoped at epoch', best['best_epoch'])
+    print('Training loss:' , best['training_loss'])
+    print('validation loss', best['validation_loss'])
+    print('Test accuracy: ', best["test_accuracy"])
+    print('Hyperparameter: ', best["hyperparameters"])
+
+    from sklearn.metrics import confusion_matrix
+
+    cm = confusion_matrix(best['labels'], best['predictions']) 
+
+    print(cm)
+
+
+    # Load model
+    # model_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/trial_{best['trial_id']}/model.pth"
+    # checkpoint = torch.load(model_path, map_location="cpu")
+
+    # model_args = checkpoint["model_args"]
+
+    # model = SingleNet(**model_args)
+    # model.load_state_dict(checkpoint["model_state"])
+    # model.eval()
+
+    # dummy_input = torch.randn(1, 120, 3)  # (batch, samples, channels)
+    # with torch.no_grad():
+    #     output, _, _ = model(dummy_input)
+
+    # print("Output shape:", output.shape)
+
+    # for name, param in model.named_parameters():
+    #     print(name, param.mean().item())
+    #     break
+
 if __name__ == '__main__':
     main()
+    # inspect_model()

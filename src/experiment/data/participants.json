@@ -114,26 +114,26 @@
   },
   
     "Subject_10": {
-    "timestamp": "",
-    "name": "",
-    "gender": "",
-    "age": 0,
-    "neurological_disorder": "alzheimer, epilepsy, parkinson, stroke, migraine",
-    "musculoskeletal_disorders": "carpal tunnel syndrome, arhritis",
-    "hand_arm_injury": false,
-    "dominant_hand": "",
+    "timestamp": "2026-02-27",
+    "name": "Mathias",
+    "gender": "Male",
+    "age": 25,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": "Broke his pinky finger (2009). Does not affect him on daily basic",
+    "dominant_hand": "Right",
     "NOTES" : "None"
   },
   
     "Subject_11": {
-    "timestamp": "",
-    "name": "",
-    "gender": "",
-    "age": 0,
-    "neurological_disorder": "alzheimer, epilepsy, parkinson, stroke, migraine",
-    "musculoskeletal_disorders": "carpal tunnel syndrome, arhritis",
+    "timestamp": "2026-03-03",
+    "name": "Alex",
+    "gender": "male",
+    "age": 26,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
     "hand_arm_injury": false,
-    "dominant_hand": "",
+    "dominant_hand": "Right",
     "NOTES" : "None"
   },
   
