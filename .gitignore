@@ -16,8 +16,5 @@ Thumbs.db
 # Images for article
 edited_images/
 
-# BCI2a dataset
-src/utilities/BCI_IV_2a/
-
 # Tensorboard logging files
 src/models/loggings
