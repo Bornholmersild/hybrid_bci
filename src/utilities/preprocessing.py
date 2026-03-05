@@ -328,7 +328,7 @@ class RejectBadEpochs():
         RMS_data : np.ndarray
             Continuous RMS data after preprocessing. Shape (samples, channels)
 
-        parameter_dict : dict
+        reject_config_dict : dict
             Dictionary with parameters for the rejection routine.\n
             Should include keys:\n
             'EEG_epoch_rejection_tolerance' -> peak-to-peak auto-rejection tolerance.\n

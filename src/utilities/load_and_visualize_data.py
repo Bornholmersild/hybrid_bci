@@ -229,9 +229,9 @@ class load_datasets():
 
         # Define subject ID and fingers to append new bad epoch keys to the JSON file.
         data_file = self.find_flex_files(        
-            subjects = ['subject_11'],
+            subjects = ['subject_12'],
             modality = 'EEG',
-            fingers = 'index',
+            fingers = 'thumb',
             prefix = 'flex'
         )
         
@@ -289,20 +289,23 @@ class plot_toolbox():
                     break
 
 class visualize_EEG(plot_toolbox):
-    def __init__(self, fs = 125, trial_period = 9):
+    def __init__(self, fs = 125, trial_period = 9, BCI2a_or_OpenBCI = 'OpenBCI'):
         self.fs = fs
         self.tp = trial_period
         self.toolbox_ins = plot_toolbox()
-        self.eeg_ch_names = [
-        "Fp1", "Fp2",   # frontal pole
-        "C3",  "C4",    # central
-        "T5",  "T6",    # temporal (posterior)
-        "Cz",  "Pz",    # occipital
-        "F7",  "F8",    # temporal (anterior)
-        "F3",  "F4",    # frontal
-        "T3",  "T4",    # temporal (mid)
-        "P3",  "P4"     # parietal
-    ]
+        if BCI2a_or_OpenBCI == 'OpenBCI':
+            self.eeg_ch_names = [
+            "Fp1", "Fp2",   # frontal pole
+            "C3",  "C4",    # central
+            "T5",  "T6",    # temporal (posterior)
+            "Cz",  "Pz",    # occipital
+            "F7",  "F8",    # temporal (anterior)
+            "F3",  "F4",    # frontal
+            "T3",  "T4",    # temporal (mid)
+            "P3",  "P4"     # parietal
+            ]
+        if BCI2a_or_OpenBCI == 'BCI2a':
+            self.eeg_ch_names = ['Fz','FC3','FC1','FCz','FC2','FC4','C5','C3','C1','Cz','C2','C4','C6','CP3','CP1','CPz','CP2','CP4','P1','Pz','P2','POz']
 
     def plot_egg_across_channels(self, eeg : np.ndarray, markers : pd.DataFrame | int, display_window : list | int, ch_list : list = None, channels_per_figure : int = 4, bad_epochs : list | None = None):
         '''
@@ -631,23 +634,23 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_11',
+        subjects = 'subject_13',
         modality = 'EEG',
-        fingers = 'index',
+        fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_11',
+        subjects = 'subject_13',
         modality = 'EMG',
-        fingers = 'index',
+        fingers = 'thumb',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_11',
+        subjects = 'subject_13',
         modality = 'Markers',
-        fingers = 'index',
+        fingers = 'thumb',
         prefix = 'flex'
     )
 
@@ -658,7 +661,7 @@ def quick_visulize():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 2         # Numerical integer
+    SELECT_EXP_DATA = 0         # Numerical integer
     EEG,  total_epochs_EEG = load_ins.load_datasets_EEG(
         path_to_data_files = EEG_files[SELECT_EXP_DATA],
         preprocessing_func = EEG_ins.preprocessing_routine
@@ -722,23 +725,23 @@ def test_bad_epochs():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_11',
+        subjects = 'subject_12',
         modality = 'EEG',
-        fingers = 'thumb',
+        fingers = 'index',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_11',
+        subjects = 'subject_12',
         modality = 'EMG',
-        fingers = 'thumb',
+        fingers = 'index',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_11',
+        subjects = 'subject_12',
         modality = 'Markers',
-        fingers = 'thumb',
+        fingers = 'index',
         prefix = 'flex'
     )
 

@@ -138,14 +138,26 @@
   },
   
     "Subject_12": {
-    "timestamp": "",
-    "name": "",
-    "gender": "",
-    "age": 0,
-    "neurological_disorder": "alzheimer, epilepsy, parkinson, stroke, migraine",
-    "musculoskeletal_disorders": "carpal tunnel syndrome, arhritis",
+    "timestamp": "2026-03-04",
+    "name": "Aksel",
+    "gender": "Male",
+    "age": 25,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
     "hand_arm_injury": false,
-    "dominant_hand": "",
+    "dominant_hand": "Right",
+    "NOTES" : "None"
+  },
+  
+    "Subject_13": {
+    "timestamp": "2026-03-05",
+    "name": "Peter",
+    "gender": "Male",
+    "age": 24,
+    "neurological_disorder": false,
+    "musculoskeletal_disorders": false,
+    "hand_arm_injury": false,
+    "dominant_hand": "Right",
     "NOTES" : "None"
   }
 }

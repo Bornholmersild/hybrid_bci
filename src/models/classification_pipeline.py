@@ -221,8 +221,6 @@ class SingleManageDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
 
-    def get_rng_generator(self):
-        return self.rng
 
 class MultiManageDataset(torch.utils.data.Dataset):
     def __init__(self, eeg, emg, labels):
@@ -587,7 +585,7 @@ def load_classfication(subject_name : str | list):
     print(f"Using device: {device}")
     print("Pin memory set to:", pin_memory)
 
-    LOG_NAME = f'{subject_name}_SingleNet_EEG'
+    LOG_NAME = f'{subject_name}_SingleNet_EMG'
     log_dir = Path(__file__).resolve().parent / f'loggings/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -596,9 +594,9 @@ def load_classfication(subject_name : str | list):
     #===========#
     # Load data #
     #===========#
-    X_epoch_index, _ = load_EEG_data(subject_name = subject_name, finger_name = 'index')
-    X_epoch_thumb, _ = load_EEG_data(subject_name = subject_name, finger_name = 'thumb')
-    FREQ = EEG_FREQ
+    X_epoch_index, _ = load_EMG_data(subject_name = subject_name, finger_name = 'index')
+    X_epoch_thumb, _ = load_EMG_data(subject_name = subject_name, finger_name = 'thumb')
+    FREQ = RMS_FREQ
     print(X_epoch_index.shape, X_epoch_thumb.shape)
 
     split_ins = Manage3Split(seed = SEED)
@@ -649,7 +647,7 @@ def load_classfication(subject_name : str | list):
     MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
     DATA_CH = X_epoch_index.shape[2]
     NUM_CLASSES = 5
-    NUM_EPOCHS = 200                 # 150 - 200
+    NUM_EPOCHS = 150                 # 150 - 200
     PATIENCE = 25                   # Early stopping patience - 25
     WHICH_NETWORK = 'SingleNet'     # SingleNet or FusionNet -> Used to adjust model_args for torch.save model
 
@@ -667,9 +665,9 @@ def load_classfication(subject_name : str | list):
     parameters = [sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
               sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
               sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
-              sherpa.Discrete(name='num_hidden_units', range=[32, 256]),         # before 256
+              sherpa.Discrete(name='num_hidden_units', range=[32, 64]),         # before 256
               sherpa.Choice(name='activation', range=['relu', 'elu']),
-              sherpa.Ordinal(name='lstm_layers', range=[1, 3]),
+              #sherpa.Ordinal(name='lstm_layers', range=[1, 3]),
               sherpa.Choice(name="optimizer", range=["adamw", "sgd_momentum"]),
               sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
               sherpa.Continuous(name="momentum", range=[0.7, 0.99]),   # only used for SGD
@@ -695,7 +693,7 @@ def load_classfication(subject_name : str | list):
         batch_size = trial.parameters['batch_size']
         num_hidden_units = trial.parameters['num_hidden_units']
         activation = trial.parameters['activation'] 
-        lstm_layers = trial.parameters['lstm_layers']     # trial.parameters['lstm_layers']
+        lstm_layers = 1 #trial.parameters['lstm_layers']     # trial.parameters['lstm_layers']
 
         #=======================#
         # Multi fusion datasets #
@@ -822,7 +820,7 @@ def load_classfication(subject_name : str | list):
 
 def main():
     t0 = time.time()
-    subjects = ['subject_0']
+    subjects = ['subject_12']
 
     for subject in subjects:
         load_classfication(subject_name = subject)
@@ -830,8 +828,7 @@ def main():
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
 
-def inspect_model():
-    logging_name = 'subject_10_SingleNet_EMG'
+def inspect_model(logging_name = 'SingleNet_EMG/subject_11_SingleNet_EMG'):
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
 
     if not os.path.exists(sherpa_info_path):

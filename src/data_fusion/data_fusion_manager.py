@@ -29,7 +29,7 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "subject_11"                 # Name of the subject : subject 0, subject 1
+SUBJECT_NAME = "subject_13"                 # Name of the subject : subject 0, subject 1
 FINGER_NAME = 'flex_thumb_finger'                       # Name of the data file      - flex_baseline_finger -> 6 epochs
 NUM_EPOCHS = 30                                         # Number of epochs per experiment
 REST_DURATION = 3                                       # Rest duration (sec) during 1 trial
