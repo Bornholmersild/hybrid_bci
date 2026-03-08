@@ -219,6 +219,73 @@ class SingleNet_CNN(nn.Module):
 
         return logits, None, None        # None is placeholders
 
+class SingleNet_CNN_LSTM_ATTENSION(nn.Module):
+    def __init__(self, data_ch, num_classes = 2, dropout = 0.3, activation = 'relu', lstm_layers = 1, hidden = 64, cnn_filters = 32, kernel_size = 5):
+        super().__init__()
+        '''
+        Args:
+            input_dim - int
+                The number of expected features in the input sequence at each time step (n_channels)
+            hidden_dim - int
+                The number of features in the hidden state. How much memory should present the hidden state at one time stamp
+            layer_dim - int
+                Stacking multiple LSTM layers deepens the model. If is not in the timestamp direction. But the hiddenstate goes into the input of another LSTM.
+            output_dim - int
+                Maps the hidden state in nn.Linear outputs to predictions (n_classes)
+        '''
+
+        activations = {
+            'relu' : nn.ReLU(),
+            'elu' : nn.ELU()
+        }
+        act = activations[activation]
+
+        # ---- CNN MODULE ----
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels = data_ch, out_channels = cnn_filters, kernel_size = kernel_size, padding = kernel_size // 2),        
+            nn.BatchNorm1d(num_features = cnn_filters),
+            act,
+            nn.AvgPool1d(kernel_size = 2),
+
+            nn.Conv1d(in_channels = cnn_filters, out_channels = cnn_filters*2, kernel_size = kernel_size, padding = kernel_size // 2),        
+            nn.BatchNorm1d(num_features = cnn_filters*2),
+            act,           
+            nn.AvgPool1d(kernel_size = 2),
+            
+            nn.Dropout(dropout)
+        )
+
+        self.lstm = nn.LSTM(
+            input_size = cnn_filters*2,
+            hidden_size = hidden,
+            num_layers = lstm_layers,
+            batch_first = True
+        )
+
+        self.attension = Attension(hidden_dim = hidden)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden, hidden // 2),            # 64
+            act,
+            nn.Dropout(dropout),
+            nn.Linear(hidden // 2, num_classes)
+        )
+    
+    def forward(self, data):
+        # data: (batch, seq_len, channels)
+
+        x = data.permute(0, 2, 1)        # (batch, channels, seq_len)
+        x = self.cnn(x)                  # (batch, cnn_filters, seq_len/2)
+        x = x.permute(0, 2, 1)           # (batch, seq_len/2, cnn_filters)
+        
+        lstm_out, _ = self.lstm(x)       # (batch, seq_len, hidden)
+
+        context, attn_weights = self.attension(lstm_out)
+
+        logits = self.classifier(context)
+
+        return logits, context, attn_weights        # None is placeholders
+
 class FusionNet(nn.Module):
     def __init__(self, eeg_ch, emg_ch, hidden=32, lstm_layers = 1, num_classes=2, dropout = 0.3, activation = 'relu'):
         super().__init__()
@@ -933,7 +1000,6 @@ def inspect_model(logging_name = 'SingleNet_EMG/subject_11_SingleNet_EMG'):
     # for name, param in model.named_parameters():
     #     print(name, param.mean().item())
     #     break
-
 
 def main():
     t0 = time.time()

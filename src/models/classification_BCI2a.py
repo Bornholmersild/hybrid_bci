@@ -719,7 +719,7 @@ def load_classfication(subject_id : str | list):
               sherpa.Continuous(name="momentum", range=[0.7, 0.99]),   # only used for SGD
               sherpa.Choice(name="nesterov", range=[False, True]),     # only used for SGD])
               sherpa.Choice(name='cnn_filters', range=[16, 32, 64]),  # Only used for CNN
-              sherpa.Choice(name='kernel_size', range=[25, 50, 75]),  # Only used for CNN
+              sherpa.Choice(name='kernel_size', range=[5, 15, 25]),  # Only used for CNN
     ]
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
