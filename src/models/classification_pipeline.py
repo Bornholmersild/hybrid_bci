@@ -876,16 +876,6 @@ def load_classfication(subject_name : str | list):
         writer.close()
         study.finalize(trial, status = 'COMPLETED')
 
-def main():
-    t0 = time.time()
-    subjects = ['subject_12']
-
-    for subject in subjects:
-        load_classfication(subject_name = subject)
-
-    print('Classification COMPLETE\n'
-          'Time it took: ', time.time() - t0, 's')
-
 def inspect_model(logging_name = 'SingleNet_EMG/subject_11_SingleNet_EMG'):
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
 
@@ -943,6 +933,18 @@ def inspect_model(logging_name = 'SingleNet_EMG/subject_11_SingleNet_EMG'):
     # for name, param in model.named_parameters():
     #     print(name, param.mean().item())
     #     break
+
+
+def main():
+    t0 = time.time()
+    subjects = ['subject_12']
+
+    for subject in subjects:
+        load_classfication(subject_name = subject)
+
+    print('Classification COMPLETE\n'
+          'Time it took: ', time.time() - t0, 's')
+
 
 if __name__ == '__main__':
     main()

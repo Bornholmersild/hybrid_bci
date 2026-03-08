@@ -163,7 +163,6 @@ class SingleNet_train_eval():
         with torch.no_grad():
             for inp, lab in val_loader:
                 vinputs, vlabels = inp.to(device), lab.to(device)
-
                 # Forward pass: compute predicted outputs by passing inputs to the model
                 vlogits, _, _ = model(vinputs)
 

@@ -51,7 +51,9 @@ class Manage2Split:
 
     def build_split(self, 
                     epoch_class1 : np.ndarray,
-                    epoch_class2 : np.ndarray
+                    epoch_class2 : np.ndarray,
+                    epoch_class3 : np.ndarray, 
+                    epoch_class4 : np.ndarray
                     ) -> tuple[np.ndarray, np.ndarray]:
         '''
         Provides a dataset and labels with 5 classes for the train-validation-test split
@@ -86,13 +88,17 @@ class Manage2Split:
         # Build features
         X = np.concatenate([
             epoch_class1,
-            epoch_class2
+            epoch_class2,
+            epoch_class3,
+            epoch_class4
         ])
 
         # Build labels
         y = np.concatenate([
-            np.zeros(len(epoch_class1)),                    # 0 right hand
-            np.ones(len(epoch_class2))                      # 1 left hand
+            np.full(len(epoch_class1), 0),                    # 0 right hand
+            np.full(len(epoch_class2), 1),                      # 1 left hand
+            np.full(len(epoch_class3), 2),
+            np.full(len(epoch_class4), 3)
         ])
 
         print('\n-------------------------\n'
@@ -485,7 +491,7 @@ class Feature_Extraction():
 
         return X
 
-    def feature_extraction_rutine(self, X_train_val_concat, X_test_concat, LH_Train_epoch, RH_Train_epoch):
+    def feature_extraction_rutine(self, X_train_val_concat, X_test_concat, epoch_overview):
         # Concatinate classes with shape (epochs, samples, channels)
         EEG_slide_train_val = np.array([                        
             self.centered_sliding_windows(epo)
@@ -533,22 +539,34 @@ class Feature_Extraction():
         #===================#
         # Feature selection #
         #===================#
-        train_val_labels = np.concatenate([np.zeros(LH_Train_epoch*T_windows),
-                                           np.ones(RH_Train_epoch*T_windows)])
+        LH_Train_epoch = epoch_overview['left_hand_train.csv']
+        RH_Train_epoch = epoch_overview['right_hand_train.csv']
+        F_Train_epoch = epoch_overview['feet_train.csv']
+        T_Train_epoch = epoch_overview['tongue_train.csv']
+
+        train_val_labels = np.concatenate([np.full(LH_Train_epoch*T_windows, 0),
+                                           np.full(RH_Train_epoch*T_windows, 1),
+                                           np.full(F_Train_epoch*T_windows, 2),
+                                           np.full(T_Train_epoch*T_windows, 3)
+                                           ])
 
         normalized_labeled_df = EEG_train_val_norm_df.copy()
         normalized_labeled_df['class'] = train_val_labels
 
         significant_features = []
-
+        sig_count = 0
         for feature in EEG_train_val_norm_df.columns:
-            class_0 = EEG_train_val_norm_df[feature][normalized_labeled_df['class'] == 0]
-            class_1 = EEG_train_val_norm_df[feature][normalized_labeled_df['class'] == 1]
+            class_1 = EEG_train_val_norm_df[feature][normalized_labeled_df['class'] == 0]
+            class_2 = EEG_train_val_norm_df[feature][normalized_labeled_df['class'] == 1]
+            class_3 = EEG_train_val_norm_df[feature][normalized_labeled_df['class'] == 2]
+            class_4 = EEG_train_val_norm_df[feature][normalized_labeled_df['class'] == 3]
             
-            stat, p = stats.kruskal(class_0, class_1)
+            stat, p = stats.kruskal(class_1, class_2, class_3, class_4)
 
             if p < 0.05:
+                sig_count += 1
                 significant_features.append(feature)
+        print(f'Number of significant features {sig_count} / {EEG_test_feat.shape[1]}')
 
         # Extract those features which are significant - (num_epochs * num_windows, num_features)
         X_train = EEG_train_val_norm_df[significant_features]           
@@ -559,8 +577,8 @@ class Feature_Extraction():
         X_test = self.df_to_lstm(X_test, TE_epochs, TE_windows)
 
         print('\n------Feature Extration------\n')
-        print(f'Final X_train shape: {X_train}')
-        print(f'Final X_test shape: {X_test}')
+        print(f'Final X_train shape: {X_train.shape}')
+        print(f'Final X_test shape: {X_test.shape}')
 
         return X_train, X_test
     
@@ -570,8 +588,8 @@ def load_BCI2a_dataset(subject_id):
     train_or_test = ['train', 'test']
     SAMPLES_PER_TRIAL = 1001
     EEG_FREQ = 250
-    EEG_LOWCUT = 8
-    EEG_HIGHCUT = 30
+    EEG_LOWCUT = 6
+    EEG_HIGHCUT = 32
     REJECT_CONFIG_DICT = {
         'EEG_epoch_rejection_tolerance' : 6,
         'EEG_ch_acceptance' : 0
@@ -590,7 +608,7 @@ def load_BCI2a_dataset(subject_id):
     # Fz,FC3,FC1,FCz,FC2,FC4,C5,C3,C1,Cz,C2,C4,C6,CP3,CP1,CPz,CP2,CP4,P1,Pz,P2,POz,EOG1,EOG2,EOG3,stim
     select_channels = [7, 9, 11]
     for tot in train_or_test:
-        train_classes = [f'left_hand_{tot}.csv', f'right_hand_{tot}.csv']
+        train_classes = [f'left_hand_{tot}.csv', f'right_hand_{tot}.csv', f'feet_{tot}.csv', f'tongue_{tot}.csv']
 
         for tc in train_classes:
             print('\n-----------------------------------')
@@ -638,11 +656,13 @@ def load_classfication(subject_id : str | list):
 
     LH_Train = dataset['left_hand_train.csv']
     RH_Train = dataset['right_hand_train.csv']
+    F_Train = dataset['feet_train.csv']
+    T_Train = dataset['tongue_train.csv']
+
     LH_Test = dataset['left_hand_test.csv']
     RH_Test = dataset['right_hand_test.csv']
-    LH_Train_epoch = epochs_overview['left_hand_train.csv']
-    RH_Train_epoch = epochs_overview['right_hand_train.csv']
-
+    F_Test = dataset['feet_test.csv']
+    T_Test = dataset['tongue_test.csv']
 
     # PLOT DATA
     # LH_raw = raw['left_hand_train.csv']
@@ -652,16 +672,15 @@ def load_classfication(subject_id : str | list):
     # vis_ins.plot_egg_across_channels(LH_raw, 0, 0, None, 3, bad_epochs = reject_mask_indices)
     
     # Concat of class 1 and class 2
-    X_train_val_concat, y_train_val_concat = split_ins.build_split(epoch_class1 = LH_Train, epoch_class2 = RH_Train)
-    X_test_concat, y_test_concat = split_ins.build_split(epoch_class1 = LH_Test, epoch_class2 = RH_Test)
+    X_train_val_concat, y_train_val_concat = split_ins.build_split(epoch_class1 = LH_Train, epoch_class2 = RH_Train, epoch_class3 = F_Train, epoch_class4 = T_Train)
+    X_test_concat, y_test_concat = split_ins.build_split(epoch_class1 = LH_Test, epoch_class2 = RH_Test, epoch_class3 = F_Test, epoch_class4 = T_Test)
 
     #====================#
     # Feature Extraction #
     #====================#
     # X_train_val_concat, X_test_concat = feat_ins.feature_extraction_rutine(X_train_val_concat = X_train_val_concat,
     #                                                                        X_test_concat = X_test_concat,
-    #                                                                        LH_Train_epoch = LH_Train_epoch,
-    #                                                                        RH_Train_epoch = RH_Train_epoch)
+    #                                                                        epoch_overview = epochs_overview)
 
     # Indicies for split of dataset
     train_rng_indices, val_rng_indices = split_ins.split_trials(num_epochs = X_train_val_concat.shape[0])
@@ -707,7 +726,7 @@ def load_classfication(subject_id : str | list):
     algorithm = sherpa.algorithms.GPyOpt(
         max_num_trials = MAX_NUM_TRIALS,
         acquisition_type = 'EI',                     # Expected improvement
-        num_initial_data_points = 20                 # Number of hyperparameter configurations before model learns
+        num_initial_data_points = 10                 # Number of hyperparameter configurations before model learns
     )
     # Study represents the hyperparameter optimization itself
     study = sherpa.Study(
@@ -730,7 +749,8 @@ def load_classfication(subject_id : str | list):
         # Single datasets #
         #=================#
         model = SingleNet_CNN(data_ch = DATA_CH, num_classes = NUM_CLASSES, dropout = dropout, activation = activation, cnn_filters = cnn_filters, kernel_size = kernel_size)
-
+        model.to(device)
+        
         criterion = nn.CrossEntropyLoss()
         optimizer = build_optimizer(model_params = model.parameters(), trial_parameters = trial.parameters)
 
