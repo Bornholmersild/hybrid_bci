@@ -27,7 +27,7 @@ import antropy as ant
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
 from src.utilities.trainer_and_evaluator import SingleNet_train_eval
 from src.utilities.load_and_visualize_data import load_datasets, visualize_EEG
-from src.models.classification_pipeline import SingleNet, SingleManageDataset, Attension, ExperimentLogger, SingleManageDataset, build_optimizer, inspect_model
+from src.models.classification_pipeline import SingleNet, SingleNet_CNN, SingleManageDataset, ExperimentLogger, SingleManageDataset, build_optimizer, inspect_model
 
 # Avoid messages for sherpa
 logging.getLogger("GP").setLevel(logging.CRITICAL)
@@ -587,7 +587,8 @@ def load_BCI2a_dataset(subject_id):
                                         reject_config_dict = REJECT_CONFIG_DICT,
                                         samples_per_trial = SAMPLES_PER_TRIAL,
                                         EEG_useable_channels = None)
-
+    # Fz,FC3,FC1,FCz,FC2,FC4,C5,C3,C1,Cz,C2,C4,C6,CP3,CP1,CPz,CP2,CP4,P1,Pz,P2,POz,EOG1,EOG2,EOG3,stim
+    select_channels = [7, 9, 11]
     for tot in train_or_test:
         train_classes = [f'left_hand_{tot}.csv', f'right_hand_{tot}.csv']
 
@@ -597,7 +598,7 @@ def load_BCI2a_dataset(subject_id):
             dataset = data_dir / tc
             data = pd.read_csv(dataset).to_numpy()              # (samples, channels)
 
-            EEG_temp = data[:, 0:22]                            # Remove non EEG data
+            EEG_temp = data[:, select_channels]                            # Remove non EEG data
 
             #===============#
             # Preprocessing #
@@ -618,7 +619,7 @@ def load_classfication(subject_id : str | list):
     print(f"Using device: {device}")
     print("Pin memory set to:", pin_memory)
 
-    LOG_NAME = f'{subject_id}_features'
+    LOG_NAME = f'{subject_id}_CNN'
     log_dir = Path(__file__).resolve().parent / f'loggings/BCI_IV_2a/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -628,7 +629,7 @@ def load_classfication(subject_id : str | list):
     logger = ExperimentLogger(save_path = log_dir)
     split_ins = Manage2Split(seed = SEED)
     train_eval_ins = SingleNet_train_eval()
-    feat_ins = Feature_Extraction(fs = 250, window_size = window_size, step_size = step_size)
+    # feat_ins = Feature_Extraction(fs = 250, window_size = window_size, step_size = step_size)
 
     #===========#
     # Load data #
@@ -650,7 +651,6 @@ def load_classfication(subject_id : str | list):
     # vis_ins = visualize_EEG(fs = 250, trial_period = 4, BCI2a_or_OpenBCI='BCI2a')
     # vis_ins.plot_egg_across_channels(LH_raw, 0, 0, None, 3, bad_epochs = reject_mask_indices)
     
-
     # Concat of class 1 and class 2
     X_train_val_concat, y_train_val_concat = split_ins.build_split(epoch_class1 = LH_Train, epoch_class2 = RH_Train)
     X_test_concat, y_test_concat = split_ins.build_split(epoch_class1 = LH_Test, epoch_class2 = RH_Test)
@@ -658,16 +658,15 @@ def load_classfication(subject_id : str | list):
     #====================#
     # Feature Extraction #
     #====================#
-    X_train_val_concat, X_test_concat = feat_ins.feature_extraction_rutine(X_train_val_concat = X_train_val_concat,
-                                                                           X_test_concat = X_test_concat,
-                                                                           LH_Train_epoch = LH_Train_epoch,
-                                                                           RH_Train_epoch = RH_Train_epoch)
+    # X_train_val_concat, X_test_concat = feat_ins.feature_extraction_rutine(X_train_val_concat = X_train_val_concat,
+    #                                                                        X_test_concat = X_test_concat,
+    #                                                                        LH_Train_epoch = LH_Train_epoch,
+    #                                                                        RH_Train_epoch = RH_Train_epoch)
 
     # Indicies for split of dataset
     train_rng_indices, val_rng_indices = split_ins.split_trials(num_epochs = X_train_val_concat.shape[0])
     test_rng_indices = split_ins.shuffle_BCI2a_test(num_epochs = X_test_concat.shape[0])
     
-
     # Create whole dataset
     X_train_val_ins = SingleManageDataset(X_train_val_concat, y_train_val_concat)
     X_test_ins = SingleManageDataset(X_test_concat, y_test_concat)
@@ -680,10 +679,10 @@ def load_classfication(subject_id : str | list):
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 200             # 75 - 250 (simply to max) 
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max)      # EMG 100 - EEG 250
     DATA_CH = X_train_val_concat.shape[2]
     NUM_CLASSES = 2
-    NUM_EPOCHS = 250                 # 150 - 200
+    NUM_EPOCHS = 250                 # 150 - 200                    # EMG 150 - EEG 200
     PATIENCE = 40                   # Early stopping patience - 25
     
     #====================================#
@@ -700,6 +699,8 @@ def load_classfication(subject_id : str | list):
               sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
               sherpa.Continuous(name="momentum", range=[0.7, 0.99]),   # only used for SGD
               sherpa.Choice(name="nesterov", range=[False, True]),     # only used for SGD])
+              sherpa.Choice(name='cnn_filters', range=[16, 32, 64]),  # Only used for CNN
+              sherpa.Choice(name='kernel_size', range=[25, 50, 75]),  # Only used for CNN
     ]
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
@@ -722,11 +723,13 @@ def load_classfication(subject_id : str | list):
         num_hidden_units = trial.parameters['num_hidden_units']
         activation = trial.parameters['activation'] 
         lstm_layers = trial.parameters['lstm_layers']     # trial.parameters['lstm_layers']
+        cnn_filters = trial.parameters['cnn_filters']
+        kernel_size = trial.parameters['kernel_size']
 
         #=================#
         # Single datasets #
         #=================#
-        model = SingleNet(data_ch = DATA_CH, hidden = num_hidden_units, lstm_layers = lstm_layers, num_classes = NUM_CLASSES, dropout = dropout, activation = activation)
+        model = SingleNet_CNN(data_ch = DATA_CH, num_classes = NUM_CLASSES, dropout = dropout, activation = activation, cnn_filters = cnn_filters, kernel_size = kernel_size)
 
         criterion = nn.CrossEntropyLoss()
         optimizer = build_optimizer(model_params = model.parameters(), trial_parameters = trial.parameters)
@@ -792,7 +795,7 @@ def load_classfication(subject_id : str | list):
                 f'Train {avg_train_loss:.4f} | '
                 f'Val {avg_vloss:.4f} | '
                 f'Acc {vacc:.2f} |',
-                f'Early stopping {early_stopping_counter}',
+                f'Early stopping {early_stopping_counter} |',
                 end='\r',
                 flush=True
             )
@@ -840,4 +843,4 @@ def main():
 
 if __name__ == '__main__':
     # main()
-    inspect_model(logging_name = 'BCI_IV_2a/subject_3_features')
+    inspect_model(logging_name = 'BCI_IV_2a/subject_3_CNN')

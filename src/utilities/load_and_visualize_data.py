@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
+from scipy.signal import welch
 # From own implementations
 from src.utilities.preprocessing import Filtering, EEG_preprocessing, EMG_preprocessing, RejectBadEpochs
 # from src.utilities.EEG_feature_extraction import FeatureExtraction
@@ -82,30 +83,30 @@ class load_datasets():
              file_idx += 1
 
         return marker_dict
-    
+    '''
     def load_datasets_EEG(self,
                           path_to_data_files : Union[list | Path],
                           preprocessing_func : Callable) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        '''
-        Load EEG data set given desired data path files from -> find_flex_files
+        
+        # Load EEG data set given desired data path files from -> find_flex_files
 
-        Parameters
-        ----------
-        path_to_data_files : list
-            A list of pathways to data files
-        bandpass_lowcut : int
-            Desired lowcut bandpass frequency
-        bandpass_highcut : int
-            Desired highcut bandpass frequency
-        extract_event : str
-            Extract period of events (For example: 'all', 'contract', 'release', 'rest') by default 'all'
+        # Parameters
+        # ----------
+        # path_to_data_files : list
+        #     A list of pathways to data files
+        # bandpass_lowcut : int
+        #     Desired lowcut bandpass frequency
+        # bandpass_highcut : int
+        #     Desired highcut bandpass frequency
+        # extract_event : str
+        #     Extract period of events (For example: 'all', 'contract', 'release', 'rest') by default 'all'
 
-        Returns
-        -------
-        :return: Continues preprocessed EEG data
-        :return: Epoch preprocessed EEG data
-        :return: Mean epoch preprocessed EEG data
-        '''
+        # Returns
+        # -------
+        # :return: Continues preprocessed EEG data
+        # :return: Epoch preprocessed EEG data
+        # :return: Mean epoch preprocessed EEG data
+        
         if isinstance(path_to_data_files, Path):
             path_to_data_files = [path_to_data_files]
         print('------------------\n'
@@ -130,12 +131,57 @@ class load_datasets():
         EEG = np.concatenate(all_data, axis = 0)
         print(f"Reshaped data shape: {EEG.shape}")
 
-        return EEG, epochs_overview
+        return EEG, epochs_overview'''
     
-    def load_datasets_EMG(self,
+    def load_EMG_data(self, subject_name : str | list, finger_name : str, EMG_config_dict : dict, reject_config_dict : dict):
+        EMG_FREQ = 2000
+        EMG_LOWCUT = 20
+        EMG_HIGHCUT = 450
+        TRIAL_PERIOD = 9
+        TRIM_PERIOD = 3
+
+        EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+        reject_ins = RejectBadEpochs(base_dir = self.base_dir)
+
+        #================#
+        # Find EMG files #
+        #================#
+        EMG_files = self.find_flex_files(
+            subjects = subject_name,
+            modality = "EMG",
+            fingers = finger_name,
+            prefix = 'flex'
+        )
+
+        RMS, EMG, epochs_overview = self._extract_EMG_data(path_to_data_files = EMG_files, 
+                                                           preprocessing_func = EMG_ins.preprocessing_routine,
+                                                           EMG_config_dict = EMG_config_dict)
+
+        # Should be in sherpa loop 
+        reject_mask = reject_ins.reject_routine(data_file_per_finger = EMG_files,
+                                                epochs_overview = epochs_overview,
+                                                EEG_data = None,
+                                                RMS_data = RMS,
+                                                reject_config_dict = reject_config_dict,
+                                                EEG_useable_channels = None)
+
+        total_epochs = sum(epochs_overview)
+        RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, RMS.shape[1])
+        EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, EMG.shape[1]) if EMG is not None else None
+
+        RMS_epoch_clean = RMS_epoch[~reject_mask]
+        EMG_epoch_clean = EMG_epoch[~reject_mask] if EMG is not None else None
+
+        filt_ins = Filtering()
+        RMS_epoch_norm = filt_ins.zscore(RMS_epoch_clean, mode = 'within_ch')
+        EMG_epoch_norm = filt_ins.zscore(EMG_epoch_clean, mode = 'within_ch') if EMG is not None else None
+
+        return RMS_epoch_norm, EMG_epoch_norm, epochs_overview
+    
+    def _extract_EMG_data(self,
                           path_to_data_files : Union[list | Path],
                           preprocessing_func : Callable,
-                          EMG_config_dict : dict):
+                          EMG_config_dict : dict) -> tuple[np.ndarray, np.ndarray, list]:
         print('------------------\n'
             'Process for EMG data\n'
             '------------------\n')
@@ -634,21 +680,21 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_13',
+        subjects = 'subject_6',
         modality = 'EEG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_13',
+        subjects = 'subject_8',
         modality = 'EMG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_13',
+        subjects = 'subject_8',
         modality = 'Markers',
         fingers = 'thumb',
         prefix = 'flex'
@@ -661,13 +707,13 @@ def quick_visulize():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 0         # Numerical integer
-    EEG,  total_epochs_EEG = load_ins.load_datasets_EEG(
-        path_to_data_files = EEG_files[SELECT_EXP_DATA],
-        preprocessing_func = EEG_ins.preprocessing_routine
-    )
+    SELECT_EXP_DATA = 1         # Numerical integer
+    # EEG,  total_epochs_EEG = load_ins.load_datasets_EEG(
+    #     path_to_data_files = EEG_files[SELECT_EXP_DATA],
+    #     preprocessing_func = EEG_ins.preprocessing_routine
+    # )
 
-    RMS, EMG, epochs_overview = load_ins.load_datasets_EMG(
+    RMS, EMG, epochs_overview = load_ins._extract_EMG_data(         # Without reject bad epochs
         path_to_data_files = EMG_files[SELECT_EXP_DATA],
         preprocessing_func = EMG_ins.preprocessing_routine,
         EMG_config_dict = EMG_CONFIG_DICT
@@ -679,13 +725,14 @@ def quick_visulize():
 
     EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, 3)
     RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, 3)
-    EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, 16)
+    # EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, 16)
 
     vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
 
-    vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = markers, display_window = 0)
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = None, display_window = 0)
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
+
 
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)

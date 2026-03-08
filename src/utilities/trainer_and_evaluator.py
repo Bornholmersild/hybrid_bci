@@ -249,15 +249,15 @@ class SingleNet_train_eval():
                 logits, _, _ = model(inputs)
 
                 # Compute loss
-                loss = criterion(logits, labels)
+                loss = criterion(logits, labels)                    # Computes negative log likelihood
                 running_loss += loss.item()
 
                 # Predicted class index
-                _, predicted = torch.max(logits, dim=1)
+                _, predicted = torch.max(logits, dim=1)             # index of max value (predicted class)
 
                 # Accuracy statistics
                 total += labels.size(0)
-                correct += (predicted == labels).sum().item()
+                correct += (predicted == labels).sum().item()       # Sum of correct labels equal to predictions
 
                 # Store outputs for confusion matrix etc.
                 all_preds.append(predicted.cpu())

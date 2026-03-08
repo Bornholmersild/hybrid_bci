@@ -15,6 +15,7 @@ from datetime import datetime
 import logging                  # Avoid loggings from GP
 from copy import deepcopy       # Used for copy model_state
 import time
+import matplotlib.pyplot as plt
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
@@ -161,6 +162,63 @@ class SingleNet(nn.Module):
 
         return logits, context, attn_weights
 
+class SingleNet_CNN(nn.Module):
+    def __init__(self, data_ch, num_classes = 2, dropout = 0.3, activation = 'relu', cnn_filters = 32, kernel_size = 5):
+        super().__init__()
+        '''
+        Args:
+            input_dim - int
+                The number of expected features in the input sequence at each time step (n_channels)
+            hidden_dim - int
+                The number of features in the hidden state. How much memory should present the hidden state at one time stamp
+            layer_dim - int
+                Stacking multiple LSTM layers deepens the model. If is not in the timestamp direction. But the hiddenstate goes into the input of another LSTM.
+            output_dim - int
+                Maps the hidden state in nn.Linear outputs to predictions (n_classes)
+        '''
+
+        activations = {
+            'relu' : nn.ReLU(),
+            'elu' : nn.ELU()
+        }
+        act = activations[activation]
+
+        # ---- CNN MODULE ----
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels = data_ch, out_channels = cnn_filters, kernel_size = kernel_size, padding = kernel_size // 2),        
+            nn.BatchNorm1d(num_features = cnn_filters),
+            act,
+            nn.AvgPool1d(kernel_size = 2),
+
+            nn.Conv1d(in_channels = cnn_filters, out_channels = cnn_filters*2, kernel_size = kernel_size, padding = kernel_size // 2),        
+            nn.BatchNorm1d(num_features = cnn_filters*2),
+            act,           
+            nn.AvgPool1d(kernel_size = 2),
+            
+            nn.Dropout(dropout)
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(cnn_filters*2, cnn_filters),            # 64
+            act,
+            nn.Dropout(dropout),
+            nn.Linear(cnn_filters, num_classes)
+        )
+    
+    def forward(self, data):
+        # data: (batch, seq_len, channels)
+
+        x = data.permute(0, 2, 1)        # (batch, channels, seq_len)
+        
+        x = self.cnn(x)                  # (batch, cnn_filters, seq_len/2)
+        
+        # Concatenate channel embeddings
+        x = torch.mean(x, dim=2)   # (B, F)
+
+        logits = self.classifier(x)
+
+        return logits, None, None        # None is placeholders
+
 class FusionNet(nn.Module):
     def __init__(self, eeg_ch, emg_ch, hidden=32, lstm_layers = 1, num_classes=2, dropout = 0.3, activation = 'relu'):
         super().__init__()
@@ -220,7 +278,6 @@ class SingleManageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
-
 
 class MultiManageDataset(torch.utils.data.Dataset):
     def __init__(self, eeg, emg, labels):
@@ -520,7 +577,7 @@ def load_EEG_data(subject_name : str | list, finger_name : str):
 
     return EEG_epoch_norm, epochs_overview
 
-def load_EMG_data(subject_name : str | list, finger_name : str):
+def load_EMG_data(subject_name : str | list, finger_name : str, EMG_config_dict : dict):
     base_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
 
     load_ins = load_datasets(base_dir = base_dir)
@@ -537,7 +594,7 @@ def load_EMG_data(subject_name : str | list, finger_name : str):
     RMS, EMG, epochs_overview = load_ins.load_datasets_EMG(
         path_to_data_files = EMG_files,
         preprocessing_func = EMG_ins.preprocessing_routine,
-        EMG_config_dict = EMG_CONFIG_DICT
+        EMG_config_dict = EMG_config_dict
     )
 
     # Should be in sherpa loop 
@@ -623,7 +680,8 @@ def load_classfication(subject_name : str | list):
                                             thumb_trials_indices = test_t,
                                             fs = FREQ)
     
-
+    print(X_train.shape)
+    exit()
     #=======================#
     # Multi fusion datasets #
     #=======================#
@@ -888,4 +946,3 @@ def inspect_model(logging_name = 'SingleNet_EMG/subject_11_SingleNet_EMG'):
 
 if __name__ == '__main__':
     main()
-    # inspect_model()
