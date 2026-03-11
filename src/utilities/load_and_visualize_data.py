@@ -133,14 +133,69 @@ class load_datasets():
 
         return EEG, epochs_overview'''
     
-    def load_EMG_data(self, subject_name : str | list, finger_name : str, EMG_config_dict : dict, reject_config_dict : dict):
-        EMG_FREQ = 2000
-        EMG_LOWCUT = 20
-        EMG_HIGHCUT = 450
-        TRIAL_PERIOD = 9
-        TRIM_PERIOD = 3
+    def load_EEG_data(self, subject_name : str | list, finger_name : str, reject_config_dict : dict, preprocessing_func : Callable, EEG_useable_channels : list | None):
+        reject_ins = RejectBadEpochs(base_dir = self.base_dir)
 
-        EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+        #================#
+        # Find EMG files #
+        #================#
+        EEG_files = self.find_flex_files(
+            subjects = subject_name,
+            modality = "EEG",
+            fingers = finger_name,
+            prefix = 'flex'
+        )
+
+        EEG, epochs_overview = self._extract_EEG_data(path_to_data_files = EEG_files, 
+                                                      preprocessing_func = preprocessing_func)
+
+        # Should be in sherpa loop 
+        reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files,
+                                                epochs_overview = epochs_overview,
+                                                EEG_data = EEG,
+                                                RMS_data = None,
+                                                reject_config_dict = reject_config_dict,
+                                                EEG_useable_channels = None)
+
+        total_epochs = sum(epochs_overview)
+        EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
+
+        EEG_epoch_clean = EEG_epoch[~reject_mask]
+
+        filt_ins = Filtering()
+        EEG_epoch_norm = filt_ins.zscore(EEG_epoch_clean, mode = 'within_ch')
+
+        return EEG_epoch_norm, epochs_overview
+    
+    def _extract_EEG_data(self,
+                          path_to_data_files : Union[list | Path],
+                          preprocessing_func : Callable) -> tuple[np.ndarray, np.ndarray, list]:
+        print('------------------\n'
+            'Process for EEG data\n'
+            '------------------\n')
+        if isinstance(path_to_data_files, Path):
+            path_to_data_files = [path_to_data_files]
+
+        epochs_overview = []
+        eeg_data = []
+
+        for data_file in path_to_data_files:
+            print(data_file)
+            raw_data_df = pd.read_csv(data_file)
+            raw_data = raw_data_df.iloc[:, 1:17].to_numpy()
+            
+            # Preprocessing
+            eeg_temp, num_epochs = preprocessing_func(raw_eeg = raw_data)
+
+            eeg_data.append(eeg_temp)
+            epochs_overview.append(num_epochs)
+        
+        EEG = np.concatenate(eeg_data, axis = 0)
+        
+        return EEG, epochs_overview
+        
+    def load_EMG_data(self, subject_name : str | list, finger_name : str, EMG_config_dict : dict, reject_config_dict : dict, preprocessing_func : Callable):
+    
         reject_ins = RejectBadEpochs(base_dir = self.base_dir)
 
         #================#
@@ -154,7 +209,7 @@ class load_datasets():
         )
 
         RMS, EMG, epochs_overview = self._extract_EMG_data(path_to_data_files = EMG_files, 
-                                                           preprocessing_func = EMG_ins.preprocessing_routine,
+                                                           preprocessing_func = preprocessing_func,
                                                            EMG_config_dict = EMG_config_dict)
 
         # Should be in sherpa loop 
@@ -651,7 +706,7 @@ def quick_visulize():
     
     EMG_LOWCUT = 20
     EMG_HIGHCUT = 450
-    EEG_LOWCUT = 2          # 2          MRCP: 0.05-3 Hz  , Sensorimotor rhythms: 8-30 Hz, 
+    EEG_LOWCUT = 0.5          # 2          MRCP: 0.05-3 Hz  , Sensorimotor rhythms: 8-30 Hz, 
     EEG_HIGHCUT = 32        # 32
 
     TRIAL_PERIOD = 9
@@ -680,21 +735,21 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_6',
+        subjects = 'subject_14',
         modality = 'EEG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_8',
+        subjects = 'subject_14',
         modality = 'EMG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_8',
+        subjects = 'subject_14',
         modality = 'Markers',
         fingers = 'thumb',
         prefix = 'flex'
@@ -707,11 +762,11 @@ def quick_visulize():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 1         # Numerical integer
-    # EEG,  total_epochs_EEG = load_ins.load_datasets_EEG(
-    #     path_to_data_files = EEG_files[SELECT_EXP_DATA],
-    #     preprocessing_func = EEG_ins.preprocessing_routine
-    # )
+    SELECT_EXP_DATA = 0         # Numerical integer
+    EEG, total_epochs_EEG = load_ins._extract_EEG_data(
+        path_to_data_files = EEG_files[SELECT_EXP_DATA],
+        preprocessing_func = EEG_ins.preprocessing_routine
+    )
 
     RMS, EMG, epochs_overview = load_ins._extract_EMG_data(         # Without reject bad epochs
         path_to_data_files = EMG_files[SELECT_EXP_DATA],
@@ -725,18 +780,18 @@ def quick_visulize():
 
     EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, 3)
     RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, 3)
-    # EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, 16)
+    EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, 16)
 
     vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
 
     vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = None, display_window = 0)
-    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
 
 
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
-    # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+    vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 def test_bad_epochs():
     EEG_FREQ = 125
@@ -840,7 +895,6 @@ def test_bad_epochs():
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = reject_mask_indices)
     
-
 if __name__ == '__main__':
     # remove_bad_epochs()
     quick_visulize()

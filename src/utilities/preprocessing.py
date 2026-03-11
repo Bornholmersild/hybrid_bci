@@ -496,7 +496,7 @@ class EEG_preprocessing(Filtering):
         self.trim_period = trim_period
         self.expected_num_epochs = 30
 
-    def trim_trial_periods(self,
+    def trim_trial_periods_UNUSED(self,
                            EEG_bandpass : np.ndarray,
                            all_markers: np.ndarray,
                            markers_idx: np.ndarray,
@@ -666,7 +666,7 @@ class EEG_preprocessing(Filtering):
 
         return EEG_trim, num_epochs
     
-    def reject_channel(self, signal, print_rej_ch=False):
+    def reject_channel_UNUSED(self, signal, print_rej_ch=False):
         mean_uV = np.mean(np.abs(signal), axis=0)
         std_uV = np.std(signal, axis=0)
 
