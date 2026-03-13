@@ -40,8 +40,8 @@ RMS_FREQ = 40                   # 40 for 500 samples, 125 for 32 samples (window
 
 EMG_LOWCUT = 20
 EMG_HIGHCUT = 450
-EEG_LOWCUT = 0.5
-EEG_HIGHCUT = 32
+EEG_LOWCUT = 8
+EEG_HIGHCUT = 30
 
 EEG_NUM_CH = 3
 EEG_NUM_CH = 16
@@ -55,7 +55,7 @@ RMS_WINDOW_STEPSIZE = 50            # 50 samples - 25 ms (90 % overlap)         
 HAMPEL_WINDOWSIZE = 100
 HAMPEL_SIGMA = 2
 
-EEG_USEABLE_CHANNELS = [2, 3, 6, 7, 10, 11]
+EEG_USEABLE_CHANNELS = [2, 3, 6]
 
 SEED = 42
 np.random.seed(SEED)
@@ -189,7 +189,7 @@ class SingleNet_LSTM(nn.Module):
         The number of features in the hidden state. How much memory should present the hidden state at one time stamp
     lstm_layers : int (Optional hyperparameter)
         Stacking multiple LSTM layers deepens the model. If is not in the timestamp direction. But the hiddenstate goes into the input of another LSTM.
-    bidirectional : int (Optional hyperparameter)
+    bidirectional : bool (Optional hyperparameter)
         Enable bi-directional LSTM. Doubles the hidden_dim dimensionality.
     dropout : float (Optional hyperparameter)
         Introduce a dropout probability on the outputs of each LSTM layers. Except for the final layer.
@@ -316,8 +316,30 @@ class SingleNet_CNN(nn.Module):
 
         return logits, None, None        # None is placeholders
 
-class SingleNet_CNN_LSTM_ATTENSION(nn.Module):
-    def __init__(self, data_ch, num_classes = 2, dropout = 0.3, activation = 'relu', lstm_layers = 1, hidden = 64, cnn_filters = 32, kernel_size = 5):
+class SingleNet_CNN_LSTM(nn.Module):
+    '''
+    Single network to perform CNN + LSTM on EEG or EMG datasets.\n
+    Returns logits from LSTM features to number of classes to classify
+
+    Parameters
+    ----------
+    input_dim : int
+        The number of expected features in the input sequence at each time step (n_channels)
+    output_dim : int
+        Maps the hidden state in nn.Linear outputs to predictions (n_classes)
+    hidden_dim : int (Optional hyperparameter)
+        The number of features in the hidden state. How much memory should present the hidden state at one time stamp
+    lstm_layers : int (Optional hyperparameter)
+        Stacking multiple LSTM layers deepens the model. If is not in the timestamp direction. But the hiddenstate goes into the input of another LSTM.
+    bidirectional : bool (Optional hyperparameter)
+        Enable bi-directional LSTM. Doubles the hidden_dim dimensionality.
+    dropout : float (Optional hyperparameter)
+        Introduce a dropout probability on the outputs of each LSTM layers. Except for the final layer.
+    dense_ratio : int (Optional hyperparameter)
+        Embed higher-dimensional space (dense_hidden_layers < dense_layers) -> learns more complex nonlienar combinations -> risk of overfitting.
+        Distill LSTM features into a compact representation (dense_hidden_layers > dense_layers) -> strong regularization -> risk of underfit and removal of important patterns
+    '''
+    def __init__(self, input_dim : np.ndarray, output_dim : int, hidden_dim : int, lstm_layers : int, bidirectional : bool, dropout : float, activation : str, dense_ratio : int, cnn_filters = 32, kernel_size = 5):
         super().__init__()
         '''
         Args:
@@ -330,6 +352,14 @@ class SingleNet_CNN_LSTM_ATTENSION(nn.Module):
             output_dim - int
                 Maps the hidden state in nn.Linear outputs to predictions (n_classes)
         '''
+        self.bidirectional = bidirectional
+
+        if bidirectional:                       # For Bi-LSTM : hidden units is doubled
+            dense_hidden_layers = hidden_dim * 2
+        else:
+            dense_hidden_layers = hidden_dim
+        
+        dense_layers = max(8, int(dense_hidden_layers * dense_ratio))
 
         activations = {
             'relu' : nn.ReLU(),
@@ -338,50 +368,84 @@ class SingleNet_CNN_LSTM_ATTENSION(nn.Module):
         act = activations[activation]
 
         # ---- CNN MODULE ----
+        # Figure out:
+        #   AvgPool vs maxpool
+        #   cnn_filters*2
+        # Check it works with dimensions
         self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels = data_ch, out_channels = cnn_filters, kernel_size = kernel_size, padding = kernel_size // 2),        
+            nn.Conv1d(in_channels = input_dim, out_channels = cnn_filters, kernel_size = kernel_size, padding = kernel_size // 2),        
             nn.BatchNorm1d(num_features = cnn_filters),
             act,
-            nn.AvgPool1d(kernel_size = 2),
+            nn.MaxPool1d(kernel_size = 2),
 
             nn.Conv1d(in_channels = cnn_filters, out_channels = cnn_filters*2, kernel_size = kernel_size, padding = kernel_size // 2),        
             nn.BatchNorm1d(num_features = cnn_filters*2),
             act,           
-            nn.AvgPool1d(kernel_size = 2),
+            nn.MaxPool1d(kernel_size = 2),
             
             nn.Dropout(dropout)
         )
 
         self.lstm = nn.LSTM(
             input_size = cnn_filters*2,
-            hidden_size = hidden,
+            hidden_size = hidden_dim,
             num_layers = lstm_layers,
-            batch_first = True
+            batch_first = True,
+            dropout = dropout,
+            bidirectional = bidirectional
         )
 
-        self.attension = Attension(hidden_dim = hidden)
-
+        ''' FOR adding attension
+        # __init__
+        self.attension = Attension(hidden_dim = dense_hidden_layers)
+        # forword
+        lstm_out, _ = self.lstm(x)       # (batch, seq_len, hidden)
+        context, attn_weights = self.attension(lstm_out)
+        logits = self.classifier(context)'''
+        
         self.classifier = nn.Sequential(
-            nn.Linear(hidden, hidden // 2),            # 64
+            nn.Linear(dense_hidden_layers, dense_layers),            # 64
             act,
             nn.Dropout(dropout),
-            nn.Linear(hidden // 2, num_classes)
+            nn.Linear(dense_layers, output_dim)
         )
     
-    def forward(self, data):
-        # data: (batch, seq_len, channels)
+    def forward(self, data : torch.Tensor):
+        '''
+        Runs the data through CNN + LSTM + Fully Connected layer
 
-        x = data.permute(0, 2, 1)        # (batch, channels, seq_len)
-        x = self.cnn(x)                  # (batch, cnn_filters, seq_len/2)
-        x = x.permute(0, 2, 1)           # (batch, seq_len/2, cnn_filters)
+        Parameters
+        ----------
+        data : torch.Tensor
+            DataLoader tensor with dimension: (batch, seq_len, channels) for either EEG or EMG
         
-        lstm_out, _ = self.lstm(x)       # (batch, seq_len, hidden)
+        Returns
+        ----------
+        logits : torch.Tensor
+            Linear transform of LSTM features -> logits
+        _ : None
+            Placeholder
+        _ : None
+            Placeholder
+        '''
 
-        context, attn_weights = self.attension(lstm_out)
+        x = data.permute(0, 2, 1)        # (B, S, CH) -> (B, CH, S)
+        x = self.cnn(x)                  # (B, C_filter, S/2)
+        x = x.permute(0, 2, 1)           # (B, C_filter, S/2) -> (B, S/2, C_filter)
 
-        logits = self.classifier(context)
+        _, (hn, _) = self.lstm(x)        # (B, S/2, H)
 
-        return logits, context, attn_weights        # None is placeholders
+        if self.bidirectional:                # Last two elements contain final forward and final reverse hidden states
+            h_forward = hn[-2, :, :]          # (1, batch, hidden)
+            h_backward = hn[-1, :, :]         # (1, batch, hidden)
+            h_final = torch.cat((h_forward, h_backward), dim = 1)       # Concat -> (batch, hidden * 2)
+        else:
+            h_final = hn[-1]                  # (batch, hidden)
+
+        logits = self.classifier(h_final)
+
+
+        return logits, _, _        # None is placeholders
 
 class FusionNet(nn.Module):
     def __init__(self, eeg_ch, emg_ch, hidden=32, lstm_layers = 1, num_classes=2, dropout = 0.3, activation = 'relu'):
@@ -517,18 +581,22 @@ class Manage3Split:
         rest_i, contract_i, release_i = self._segment_trials(index_sel, fs)
         rest_t, contract_t, release_t = self._segment_trials(thumb_sel, fs)
         
-        # X = np.concatenate([
-        #     contract_t,
-        #     rest_t
-        # ])
-
-        # # Build labels
-        # y = np.concatenate([
-        #     np.zeros(len(contract_t)),                    # 0 index_contract
-        #     np.ones(len(rest_t))
-        # ])
-        # Build features
+        # FOR EEG
         X = np.concatenate([
+            np.concatenate([contract_i, contract_t], axis=0),
+            np.concatenate([release_i, release_t], axis=0),
+            np.concatenate([rest_i, rest_t], axis=0)
+        ])
+
+        # Build labels
+        y = np.concatenate([
+            np.full(len(contract_i) + len(contract_t), 0),                    # 0 index_contract
+            np.full(len(release_i) + len(release_t), 1),
+            np.full(len(rest_i) + len(rest_t), 2)
+        ])
+
+        # Build features
+        '''X = np.concatenate([
             contract_i,
             release_i,
             contract_t,
@@ -544,7 +612,7 @@ class Manage3Split:
             np.full(len(release_t), 3),                   # 3 thumb_release
             np.full(len(rest_i)+len(rest_t), 4)           # 4 rest
         ])
-
+'''
         return X, y
 
     def split_trials(self, num_trials : int, train_ratio : int = 0.7) -> tuple[list, list, list]:
@@ -674,29 +742,34 @@ def build_optimizer(model_params, trial_parameters):
     raise ValueError(f"Unknown optimizer: {opt_name}")
     
 def load_classfication(subject_name : str | list):
+    # When chancing between EEG and EMG
+    # preprocessing instance
+    # Load function
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
     print(f"Using device: {device}")
     print("Pin memory set to:", pin_memory)
 
     LOG_NAME = f'{subject_name}'
-    log_dir = Path(__file__).resolve().parent / f'loggings/SingleNet_LSTM_EMG_3GO/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    log_dir = Path(__file__).resolve().parent / f'loggings/SingleNet_CNN+LSTM_EEG/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     logger_ins = ExperimentLogger(save_path = log_dir)
     load_ins = load_datasets(base_dir = data_dir)
     split_ins = Manage3Split(seed = SEED)
-    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
-    # EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    # EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
     #===========#
     # Load data #
     #===========#
-    X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-    X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    # X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    # X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
 
-    FREQ = RMS_FREQ
+    FREQ = EEG_FREQ
 
     num_index_trials = X_epoch_index.shape[0]
     num_thumb_trials = X_epoch_thumb.shape[0]
@@ -740,13 +813,13 @@ def load_classfication(subject_name : str | list):
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    MAX_NUM_TRIALS = 250             # 75 - 250 (simply to max) 
     DATA_CH = X_epoch_index.shape[2]
-    NUM_CLASSES = 5
+    NUM_CLASSES = 3
     NUM_EPOCHS = 150                 # 150 - 200
     PATIENCE = 25                   # Early stopping patience - 25
     WHICH_NETWORK = 'SingleNet'     # SingleNet or FusionNet -> Used to adjust model_args for torch.save model
-
+    NUM_INITIAL_DATA_POINTS = 125
     # Used with FusionNet
     EEG_CH = 0
     EMG_CH = 0
@@ -768,16 +841,18 @@ def load_classfication(subject_name : str | list):
               sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
               sherpa.Continuous(name="momentum", range=[0.7, 0.99]),                    # only used for SGD
               sherpa.Choice(name="nesterov", range=[False, True]),                      # only used for SGD])
-              #sherpa.Ordinal(name='lstm_layers', range=[1]),
               sherpa.Discrete(name='num_hidden_units', range=[32, 64]),         # before 256
-              #sherpa.Choice(name="bidirectional", range=[False, True])                      # only used for SGD])
+              sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
+              sherpa.Ordinal(name='kernel_size', range=[3, 7, 11, 15]),                    # kernel/fs -> (3/40, ) -> (75, 175, 275, 375) ms'
+              sherpa.Ordinal(name='lstm_layers', range=[1, 2, 3]),
+              sherpa.Choice(name="bidirectional", range=[False, True]),                      # only used for SGD])              
     ]
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
     algorithm = sherpa.algorithms.GPyOpt(
         max_num_trials = MAX_NUM_TRIALS,
         acquisition_type = 'EI',                     # Expected improvement
-        num_initial_data_points = 50                 # Number of hyperparameter configurations before model learns
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
     )
     # Study represents the hyperparameter optimization itself
     study = sherpa.Study(
@@ -793,8 +868,10 @@ def load_classfication(subject_name : str | list):
         num_hidden_units = trial.parameters['num_hidden_units']
         activation = trial.parameters['activation'] 
         dense_ratio = trial.parameters['dense_ratio']
-        lstm_layers = 1                                   
-        bidirectional = False                             
+        cnn_filters = trial.parameters['cnn_filters']
+        kernel_size = trial.parameters['kernel_size']
+        lstm_layers = trial.parameters['lstm_layers']
+        bidirectional = trial.parameters['bidirectional']          
 
         ''' Optinal hyperparameters
         trial.parameters['lstm_layers']
@@ -808,7 +885,8 @@ def load_classfication(subject_name : str | list):
         #=================#
         # Single datasets #
         #=================#
-        model = SingleNet_LSTM_ATTENSION(input_dim = DATA_CH, output_dim = NUM_CLASSES, hidden_dim = num_hidden_units, lstm_layers = lstm_layers, bidirectional = bidirectional, dropout = dropout, activation = activation, dense_ratio = dense_ratio)
+        # model = SingleNet_LSTM(input_dim = DATA_CH, output_dim = NUM_CLASSES, hidden_dim = num_hidden_units, lstm_layers = lstm_layers, bidirectional = bidirectional, dropout = dropout, activation = activation, dense_ratio = dense_ratio)
+        model = SingleNet_CNN_LSTM(input_dim = DATA_CH, output_dim = NUM_CLASSES, hidden_dim = num_hidden_units, lstm_layers = lstm_layers, bidirectional = bidirectional, dropout = dropout, activation = activation, dense_ratio = dense_ratio, cnn_filters = cnn_filters, kernel_size = kernel_size)
 
         criterion = nn.CrossEntropyLoss()
         optimizer = build_optimizer(model_params = model.parameters(), trial_parameters = trial.parameters)
@@ -829,7 +907,7 @@ def load_classfication(subject_name : str | list):
         # Create log folder
         log_folder = os.path.join(log_dir, f"trial_{trial.id}")
         os.makedirs(log_folder, exist_ok=False)
-        writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
+        # writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
 
         for epoch in range(NUM_EPOCHS):
 
@@ -840,9 +918,9 @@ def load_classfication(subject_name : str | list):
             avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
-            writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
-            writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
-            writer.flush()
+            # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
+            # writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
+            # writer.flush()
 
             study.add_observation(trial = trial,
                                 iteration = epoch,
@@ -892,7 +970,9 @@ def load_classfication(subject_name : str | list):
                 "bidirectional" : bidirectional,
                 "dropout": dropout,
                 "activation": activation,
-                "dense_ratio": dense_ratio,}
+                "dense_ratio": dense_ratio,
+                "cnn_filters" : cnn_filters,
+                "kernel_size" : kernel_size,}
         elif str.lower(WHICH_NETWORK) == 'fusionnet':
             model_arg = {
                 "eeg_dim": EEG_CH,
@@ -924,53 +1004,45 @@ def load_classfication(subject_name : str | list):
             preds = predictions,
             labels = labels)
 
-        writer.close()
+        # writer.close()
         study.finalize(trial, status = 'COMPLETED')
 
-def inspect_model(logging_name = 'SingleNet_EMG/subject_11_SingleNet_EMG'):
+def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
     # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
 
-    inspect_list = [0]
-    acc_list = []
-    for i in inspect_list:
             
-        sherpa_info_path = Path(__file__).resolve().parent / f"loggings/SingleNet_LSTM_EMG_3GO/subject_{i}/SHERPA_results.pt"
-        if not os.path.exists(sherpa_info_path):
-            raise FileExistsError(sherpa_info_path)
-        data = torch.load(sherpa_info_path, weights_only=False)
+    sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
+    if not os.path.exists(sherpa_info_path):
+        raise FileExistsError(sherpa_info_path)
+    data = torch.load(sherpa_info_path, weights_only=False)
 
-        # print(data['trials'][57])
-        acc_list = []
-        for acc in data['trials']:
-            acc_list.append(acc['test_accuracy'])
-            print(acc['test_accuracy'])
-            print(acc['hyperparameters'], '\n')
-        
-        acc_list.sort(reverse=True)
-        for i, acc in enumerate(acc_list):
-            # print(i, acc)
-            pass
-        
-        best = max(
-            data["trials"],
-            key=lambda x: x["test_accuracy"]
-        )
-        print(f'\n---------Subject {i}-----------')
-        print('Best trial ID: ', best['trial_id'])
-        print('Stoped at epoch', best['best_epoch'])
-        print('Training loss:' , best['training_loss'])
-        print('validation loss', best['validation_loss'])
-        print('Test accuracy: ', best["test_accuracy"])
-        # print('Hyperparameter: ', best["hyperparameters"])
+    # print(data['trials'][57])
+    acc_list = []
+    for i, acc in enumerate(data['trials']):
+        print('Trial ', i+1)
+        print('validation loss : ', acc['validation_loss'])
+        print('test_accuracy : ', acc['test_accuracy'])
+        print('Hyperparameters :\n', acc['hyperparameters'], '\n')
+    
+    acc_list.sort(reverse=True)
+    for i, acc in enumerate(acc_list):
+        # print(i, acc)
+        pass
+    
+    best = min(
+        data["trials"],
+        key=lambda x: x["validation_loss"]
+    )
+    print(f'\n---------Subject {i}-----------')
+    print('Best trial ID: ', best['trial_id'])
+    print('Stoped at epoch', best['best_epoch'])
+    print('Training loss:' , best['training_loss'])
+    print('validation loss', best['validation_loss'])
+    print('Test accuracy: ', best["test_accuracy"])
+    # print('Hyperparameter: ', best["hyperparameters"])
 
-        acc_list.append(best["test_accuracy"])
-
-        cm = confusion_matrix(best['labels'], best['predictions']) 
-        print(cm)
-
-    print('\n---------MEAN and STD-----------')
-    print('Mean across subjects :', np.mean(acc_list))
-    print('Std across subjects :', np.std(acc_list))
+    cm = confusion_matrix(best['labels'], best['predictions']) 
+    print(cm)
 
 def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
     model_path_folder = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}"
@@ -990,7 +1062,7 @@ def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet
 
     best_trial_id = best['trial_id']
     batch_size = best['hyperparameters']['batch_size']
-    print(f'\n---------Subject {0}-----------')
+    print(f'\n---------{subject_name}-----------')
     print('Best trial ID: ', best_trial_id)
     print('Stoped at epoch', best['best_epoch'])
     print('Training loss:' , best['training_loss'])
@@ -1001,7 +1073,7 @@ def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet
     model_path = model_path_folder / f'trial_{best_trial_id}/model.pth'
     checkpoint = torch.load(f = model_path, map_location = device)
 
-    model_interference = SingleNet_LSTM(**checkpoint["model_args"])
+    model_interference = SingleNet_CNN_LSTM(**checkpoint["model_args"])
     model_interference.load_state_dict(checkpoint["model_state"])
     model_interference.to(device)
 
@@ -1012,13 +1084,15 @@ def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet
     
     load_ins = load_datasets(base_dir = data_dir)
     split_ins = Manage3Split(seed = SEED)
-    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
-    # EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    # EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-    X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    # X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    # X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
 
-    FREQ = RMS_FREQ
+    FREQ = EEG_FREQ
 
     num_index_trials = X_epoch_index.shape[0]
     num_thumb_trials = X_epoch_thumb.shape[0]
@@ -1031,9 +1105,6 @@ def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet
                                             index_trials_indices = test_i,
                                             thumb_trials_indices = test_t,
                                             fs = FREQ)
-    print('Test 1 segment : ', X_test[0, 0:10, 2])
-    print('Test 2 segment : ', X_test[7, 30:40, 1])
-    print('Test 3 segment : ', X_test[17, 90:100, 0])
     
     #=================#
     # Single datasets #
@@ -1147,26 +1218,45 @@ def plot_tsne_context(
         n_iter=n_iter,
         init="pca",
         learning_rate="auto",
-        random_state=random_state
+        random_state=random_state,
+        n_jobs=1
     )
 
     X_embedded = tsne.fit_transform(X)
+
+    import matplotlib.colors as mcolors
+
+    # ---- convert labels to integer classes ----
+    # Example: map unique labels to 0..4
+    unique_classes = np.unique(y)
+    class_mapping = {cls: idx for idx, cls in enumerate(unique_classes)}
+    y_int = np.vectorize(class_mapping.get)(y)
+
+    num_classes = len(unique_classes)
+
+    # ---- discrete colormap ----
+    cmap = plt.get_cmap("tab10", num_classes)
+    norm = mcolors.BoundaryNorm(
+        boundaries=np.arange(-0.5, num_classes + 0.5, 1),
+        ncolors=num_classes
+    )
 
     # ---- plot ----
     plt.figure(figsize=figsize)
     scatter = plt.scatter(
         X_embedded[:, 0],
         X_embedded[:, 1],
-        c=y,
-        cmap="tab10",
+        c=y_int,
+        cmap=cmap,
+        norm=norm,
         alpha=0.7,
         s=25
     )
 
+    plt.colorbar(scatter, ticks=range(num_classes), label="Class")
     plt.xlabel("t-SNE 1")
     plt.ylabel("t-SNE 2")
     plt.title(title)
-    plt.colorbar(scatter, label="Class")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -1181,12 +1271,10 @@ def main():
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
 
-
 if __name__ == '__main__':
-    
     # main()
-    inspect_model_SNE('subject_0')
-
+    inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
+    # inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
     '''subject_name = 'subject_0'
     LOG_NAME = f'{subject_name}'
     log_dir = Path(__file__).resolve().parent / f'loggings/SingleNet_LSTM_EMG_2GO/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file

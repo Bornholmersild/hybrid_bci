@@ -1,3 +1,31 @@
+# For LSTM - EMG
+parameters = [
+            sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
+            sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
+            sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
+            sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.7, 1.0]),
+            sherpa.Choice(name='activation', range=['relu', 'elu']),
+            sherpa.Choice(name="optimizer", range=["adamw", "sgd_momentum"]),
+            sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
+            sherpa.Continuous(name="momentum", range=[0.7, 0.99]),                    
+            sherpa.Choice(name="nesterov", range=[False, True]),                      
+            sherpa.Discrete(name='num_hidden_units', range=[32, 64]),         
+]
+# For LSTM - EEG
+parameters = [
+            sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
+            sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
+            sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
+            sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.7, 1.0]),
+            sherpa.Choice(name='activation', range=['relu', 'elu']),
+            sherpa.Choice(name="optimizer", range=["adamw", "sgd_momentum"]),
+            sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
+            sherpa.Continuous(name="momentum", range=[0.7, 0.99]),                    
+            sherpa.Choice(name="nesterov", range=[False, True]),                      
+            sherpa.Ordinal(name='lstm_layers', range=[1, 2, 3]),
+            sherpa.Discrete(name='num_hidden_units', range=[32, 64]),         
+            sherpa.Choice(name="bidirectional", range=[False, True])                     
+]
 
 # Something
 parameters = [sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),

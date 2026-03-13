@@ -155,15 +155,19 @@ class load_datasets():
                                                 EEG_data = EEG,
                                                 RMS_data = None,
                                                 reject_config_dict = reject_config_dict,
-                                                EEG_useable_channels = None)
+                                                EEG_useable_channels = EEG_useable_channels)
+        
+        EEG = EEG[:, EEG_useable_channels].copy() if EEG_useable_channels is not None else EEG.copy()
 
         total_epochs = sum(epochs_overview)
         EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
 
         EEG_epoch_clean = EEG_epoch[~reject_mask]
 
+        EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
+
         filt_ins = Filtering()
-        EEG_epoch_norm = filt_ins.zscore(EEG_epoch_clean, mode = 'within_ch')
+        EEG_epoch_norm = filt_ins.zscore(EEG_car, mode = 'within_ch')
 
         return EEG_epoch_norm, epochs_overview
     
