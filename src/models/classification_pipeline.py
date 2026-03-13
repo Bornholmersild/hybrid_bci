@@ -723,7 +723,7 @@ class ExperimentLogger:
         # Save immediately (safe against crashes)
         torch.save(self.results, self.save_path)
 
-def build_optimizer(model_params, trial_parameters):
+def build_optimizer_unused(model_params, trial_parameters):
     hp = trial_parameters
     opt_name = hp["optimizer"]
     lr = float(hp["learning_rate"])
@@ -740,7 +740,20 @@ def build_optimizer(model_params, trial_parameters):
         return torch.optim.SGD(model_params, lr=lr, momentum=mom, nesterov=nes, weight_decay=wd)
 
     raise ValueError(f"Unknown optimizer: {opt_name}")
+
+def kernel_from_ratio(seq_len, ratio, min_kernel = 3):
+    kernel_size = max(min_kernel, int(round(seq_len * ratio)))
+
+    # Make odd
+    if kernel_size % 2 == 0:
+        kernel_size += 1
     
+    # Cannot exceed sequence length
+    if kernel_size > seq_len:
+        kernel_size = seq_len if seq_len % 2 == 1 else seq_len - 1
+    
+    return kernel_size
+
 def load_classfication(subject_name : str | list):
     # When chancing between EEG and EMG
     # preprocessing instance
@@ -793,6 +806,7 @@ def load_classfication(subject_name : str | list):
                                             thumb_trials_indices = test_t,
                                             fs = FREQ)
     
+    _, num_samples, num_channels = X_train.shape
     #=======================#
     # Multi fusion datasets #
     #=======================#
@@ -814,9 +828,9 @@ def load_classfication(subject_name : str | list):
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
     MAX_NUM_TRIALS = 250             # 75 - 250 (simply to max) 
-    DATA_CH = X_epoch_index.shape[2]
+    DATA_CH = num_channels
     NUM_CLASSES = 3
-    NUM_EPOCHS = 150                 # 150 - 200
+    NUM_EPOCHS = 250                 # 150 - 200
     PATIENCE = 25                   # Early stopping patience - 25
     WHICH_NETWORK = 'SingleNet'     # SingleNet or FusionNet -> Used to adjust model_args for torch.save model
     NUM_INITIAL_DATA_POINTS = 125
@@ -832,20 +846,19 @@ def load_classfication(subject_name : str | list):
     #====================================#
 
     parameters = [
-              sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
-              sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
-              sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
-              sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.7, 1.0]),
-              sherpa.Choice(name='activation', range=['relu', 'elu']),
-              sherpa.Choice(name="optimizer", range=["adamw", "sgd_momentum"]),
-              sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
-              sherpa.Continuous(name="momentum", range=[0.7, 0.99]),                    # only used for SGD
-              sherpa.Choice(name="nesterov", range=[False, True]),                      # only used for SGD])
-              sherpa.Discrete(name='num_hidden_units', range=[32, 64]),         # before 256
-              sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
-              sherpa.Ordinal(name='kernel_size', range=[3, 7, 11, 15]),                    # kernel/fs -> (3/40, ) -> (75, 175, 275, 375) ms'
-              sherpa.Ordinal(name='lstm_layers', range=[1, 2, 3]),
-              sherpa.Choice(name="bidirectional", range=[False, True]),                      # only used for SGD])              
+        sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
+        sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),  
+        sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
+
+        sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
+        sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.75, 1.0]),
+        sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
+        sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
+        sherpa.Ordinal(name='kernel_ratio', range=[0.01, 0.02, 0.03, 0.04, 0.1]), # , 0.125, 0.25, 0.5                    # kernel/fs -> (3/40, ) -> (75, 175, 275, 375) ms'
+        
+        sherpa.Choice(name='activation', range=['relu', 'elu']),
+        sherpa.Choice(name="bidirectional", range=[False, True]),                      
+        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
     ]
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
@@ -869,9 +882,13 @@ def load_classfication(subject_name : str | list):
         activation = trial.parameters['activation'] 
         dense_ratio = trial.parameters['dense_ratio']
         cnn_filters = trial.parameters['cnn_filters']
-        kernel_size = trial.parameters['kernel_size']
+        kernel_ratio = trial.parameters['kernel_ratio']
         lstm_layers = trial.parameters['lstm_layers']
-        bidirectional = trial.parameters['bidirectional']          
+        bidirectional = trial.parameters['bidirectional']   
+        lr = trial.parameters["learning_rate"]
+        weight_decay = trial.parameters["weight_decay"]
+
+        kernel_size = kernel_from_ratio(seq_len = num_samples, ratio = kernel_ratio, min_kernel = 3)
 
         ''' Optinal hyperparameters
         trial.parameters['lstm_layers']
@@ -887,9 +904,10 @@ def load_classfication(subject_name : str | list):
         #=================#
         # model = SingleNet_LSTM(input_dim = DATA_CH, output_dim = NUM_CLASSES, hidden_dim = num_hidden_units, lstm_layers = lstm_layers, bidirectional = bidirectional, dropout = dropout, activation = activation, dense_ratio = dense_ratio)
         model = SingleNet_CNN_LSTM(input_dim = DATA_CH, output_dim = NUM_CLASSES, hidden_dim = num_hidden_units, lstm_layers = lstm_layers, bidirectional = bidirectional, dropout = dropout, activation = activation, dense_ratio = dense_ratio, cnn_filters = cnn_filters, kernel_size = kernel_size)
+        model.to(device)
 
         criterion = nn.CrossEntropyLoss()
-        optimizer = build_optimizer(model_params = model.parameters(), trial_parameters = trial.parameters)
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = lr, weight_decay = weight_decay)
 
         # DataLoaders (update batch_size)
         train_loader = DataLoader(train_dataset_ins, batch_size = batch_size, shuffle = True, pin_memory = pin_memory, num_workers = 0)
@@ -1433,7 +1451,7 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
 def main():
     t0 = time.time()
-    subjects = ['subject_0']
+    subjects = ['subject_1', 'subject_2']
 
     for subject in subjects:
         load_classfication(subject_name = subject)
