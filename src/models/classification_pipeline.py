@@ -1016,33 +1016,47 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         raise FileExistsError(sherpa_info_path)
     data = torch.load(sherpa_info_path, weights_only=False)
 
-    # print(data['trials'][57])
-    acc_list = []
-    for i, acc in enumerate(data['trials']):
-        print('Trial ', i+1)
-        print('validation loss : ', acc['validation_loss'])
-        print('test_accuracy : ', acc['test_accuracy'])
-        print('Hyperparameters :\n', acc['hyperparameters'], '\n')
+    # Extract test accuracies
+    acc_list = [trial['validation_loss'] for trial in data['trials']]
+
+    # Get indices sorted from highest → lowest accuracy
+    sorted_indices = sorted(range(len(acc_list)), key=lambda i: acc_list[i], reverse=False)
+
+    # Iterate over trials in sorted order
+    for rank, idx in enumerate(sorted_indices):
+        trial = data['trials'][idx]
+
+        print('Rank:', rank + 1)
+        print('Trial:', idx + 1)
+        print('Epochs', trial['best_epoch'])
+        print('Training loss:' , trial['training_loss'])
+        print('Validation loss:', trial['validation_loss'])
+        print('Validation accuracy:', trial['validation_accuracy'])
+        print('Test accuracy:', trial['test_accuracy'])
+        print('Hyperparameters:\n', trial['hyperparameters'], '\n')
+        if rank > 30:
+            break
     
-    acc_list.sort(reverse=True)
-    for i, acc in enumerate(acc_list):
-        # print(i, acc)
-        pass
-    
-    best = min(
+    best_vloss = min(
         data["trials"],
         key=lambda x: x["validation_loss"]
     )
-    print(f'\n---------Subject {i}-----------')
-    print('Best trial ID: ', best['trial_id'])
-    print('Stoped at epoch', best['best_epoch'])
-    print('Training loss:' , best['training_loss'])
-    print('validation loss', best['validation_loss'])
-    print('Test accuracy: ', best["test_accuracy"])
-    # print('Hyperparameter: ', best["hyperparameters"])
+    best_tacc = max(
+        data['trials'],
+        key = lambda x: x['test_accuracy']
+    )
 
-    cm = confusion_matrix(best['labels'], best['predictions']) 
-    print(cm)
+    print(f'\n---------{subject_name}-----------')
+    for best_name, best_value in zip(['lowest validation loss', 'highest test accuracy'], [best_vloss, best_tacc]):
+        cm = confusion_matrix(best_value['labels'], best_value['predictions']) 
+        print(f'For {best_name}')
+        print('         Best trial ID: ', best_value['trial_id'])
+        print('         Stoped at epoch', best_value['best_epoch'])
+        print('         Training loss:' , best_value['training_loss'])
+        print('         validation loss', best_value['validation_loss'])
+        print('         Test accuracy: ', best_value["test_accuracy"])
+        # print(cm)
+        print('\n')
 
 def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
     model_path_folder = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}"
@@ -1160,7 +1174,7 @@ def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet
         accuracy = correct / total
         print(f"Test accuracy: {accuracy:.4f}")
 
-    plot_tsne_context(context = all_logits, labels = y_test, perplexity = 40, n_iter = 1000, random_state = 42)
+    _plot_tsne_context(context = all_logits, labels = y_test, perplexity = 40, n_iter = 1000, random_state = 42)
     # plot_tsne_context(context = all_context, labels = y_test, perplexity = 40, n_iter = 1000, random_state = 42)
 
     score = silhouette_score(all_logits, y_test)
@@ -1171,7 +1185,7 @@ def inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet
     # ~0 → no separation
     # <0 → overlapping
 
-def plot_tsne_context(
+def _plot_tsne_context(
     context,
     labels,
     perplexity=30,
@@ -1261,6 +1275,162 @@ def plot_tsne_context(
     plt.tight_layout()
     plt.show()
 
+def plot_model_groups_subjects(
+    subject_ids,
+    eeg_acc,
+    emg_acc,
+    fusion_acc,
+    title="Test Accuracy per Model and Subject",
+    ylabel="Accuracy (%)"
+):
+    """
+    Plot grouped bars where each group is a model (EEG, EMG, Fusion)
+    and each bar inside the group represents a subject.
+
+    Parameters
+    ----------
+    subject_ids : list
+        Example: ['S1','S2','S3','S4']
+
+    eeg_acc : list
+        Accuracy per subject for EEG model
+
+    emg_acc : list
+        Accuracy per subject for EMG model
+
+    fusion_acc : list
+        Accuracy per subject for Fusion model
+    """
+
+    models = ['LSTM-EEG', 'LSTM-EMG', 'LSTM-Fusion', 'CNN+LSTM-EEG', 'CNN+LSTM-EMG', 'CNN+LSTM-fusion', 'CNN+LSTM+Attension-EEG', 'CNN+LSTM+Attension-EMG', 'CNN+LSTM+Attension-fusion']
+    data = [eeg_acc, emg_acc, fusion_acc]
+
+    n_models = len(models)
+    n_subjects = len(subject_ids)
+
+    bar_width = 0.5 / n_subjects
+    x = np.arange(n_models)
+
+    plt.figure(figsize=(10,6))
+
+    for i, subject in enumerate(subject_ids):
+        subject_values = [data[m][i] for m in range(n_models)]
+        offset = (i - (n_subjects - 1)/2) * bar_width
+
+        plt.bar(
+            x + offset,
+            subject_values,
+            bar_width,
+            label=subject
+        )
+
+    plt.xticks(x, models)
+    plt.ylabel(ylabel)
+    plt.xlabel("Model Type")
+    plt.title(title)
+    plt.legend(title="Subjects")
+    plt.grid(axis='y', linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    plt.show()
+
+def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
+    """
+    Plot grouped bars with hierarchical x-axis:
+    Architecture -> Modality
+
+    Parameters
+    ----------
+    subject_ids : list
+        Example: ['S1','S2','S3']
+
+    accuracies : dict
+        Dictionary structured like:
+
+        {
+            "LSTM": {
+                "EEG": [...],
+                "EMG": [...],
+                "Fusion": [...]
+            },
+            "CNN+LSTM": {
+                "EEG": [...],
+                "EMG": [...],
+                "Fusion": [...]
+            },
+            "CNN+LSTM+Attention": {
+                "EEG": [...],
+                "EMG": [...],
+                "Fusion": [...]
+            }
+        }
+
+    architectures : list
+        Example: ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
+    """
+
+    modalities = ["EEG", "EMG", "Fusion"]
+
+    n_subjects = len(subject_ids)
+    bar_width = 0.5 / n_subjects
+
+    x_positions = []
+    x_labels = []
+
+    # Build positions
+    pos = 0
+    arch_centers = []
+
+    for arch in architectures:
+
+        start = pos
+
+        for mod in modalities:
+            x_positions.append(pos)
+            x_labels.append(mod)
+            pos += 1
+
+        end = pos - 1
+        arch_centers.append((start + end) / 2)
+
+        pos += 0.5  # spacing between architectures
+
+    plt.figure(figsize=(12,6))
+
+    # Plot bars per subject
+    for i, subject in enumerate(subject_ids):
+
+        offset = (i - (n_subjects - 1)/2) * bar_width
+
+        values = []
+
+        for arch in architectures:
+            for mod in modalities:
+                values.append(accuracies[arch][mod][i])
+
+        plt.bar(
+            np.array(x_positions) + offset,
+            values,
+            bar_width,
+            label=subject
+        )
+
+    plt.xticks(x_positions, x_labels)
+    plt.ylabel("Accuracy (%)")
+    plt.yticks(np.arange(0, 100.1, 10))
+    plt.ylim([0, 100])
+    # plt.xlabel("Model / Modality")
+    plt.legend(title="Subjects")
+
+    # Add architecture labels
+    for center, arch in zip(arch_centers, architectures):
+        plt.text(center, -5, arch, ha='center', va='top', fontsize=11)
+
+    plt.grid(axis='y', linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    plt.show()
+
 def main():
     t0 = time.time()
     subjects = ['subject_0']
@@ -1271,51 +1441,39 @@ def main():
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
 
+def summary_accuracies():
+    subjects = ['S0','S1','S2']
+
+    accuracies = {
+
+    "LSTM":{
+        "EEG":[0, 0, 0],
+        "EMG":[76.5, 81.5, 92.6],
+        "Fusion":[0, 0, 0]
+    },
+
+    "CNN+LSTM":{
+        "EEG":[0, 0, 0],
+        "EMG":[100, 95, 100],
+        "Fusion":[0, 0, 0]
+    },
+
+    "CNN+LSTM+Attention":{
+        "EEG":[0, 0, 0],
+        "EMG":[0, 0, 0],
+        "Fusion":[0, 0, 0]
+    }}
+
+    architectures = ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
+
+    _plot_subject_accuracy_hierarchical(subjects, accuracies, architectures)
+
+
 if __name__ == '__main__':
     # main()
-    inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
-    # inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
-    '''subject_name = 'subject_0'
-    LOG_NAME = f'{subject_name}'
-    log_dir = Path(__file__).resolve().parent / f'loggings/SingleNet_LSTM_EMG_2GO/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
-    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
+    
+    for subj in ['subject_0']:
+        inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
 
-    logger_ins = ExperimentLogger(save_path = log_dir)
-    load_ins = load_datasets(base_dir = data_dir)
-    split_ins = Manage3Split(seed = SEED)
-    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
-    # EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
-
-    #===========#
-    # Load data #
-    #===========#
-    X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-    X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-
-    FREQ = RMS_FREQ
-
-    num_index_trials = X_epoch_index.shape[0]
-    num_thumb_trials = X_epoch_thumb.shape[0]
-
-    train_i, val_i, test_i = split_ins.split_trials(num_index_trials)
-    train_t, val_t, test_t = split_ins.split_trials(num_thumb_trials)
-
-    X_train, y_train = split_ins.build_split(epoch_index = X_epoch_index,
-                                            epoch_thumb = X_epoch_thumb,
-                                            index_trials_indices = train_i,
-                                            thumb_trials_indices = train_t,
-                                            fs = FREQ)
-    X_val, y_val = split_ins.build_split(epoch_index = X_epoch_index,
-                                            epoch_thumb = X_epoch_thumb,
-                                            index_trials_indices = val_i,
-                                            thumb_trials_indices = val_t,
-                                            fs = FREQ)
-    X_test, y_test = split_ins.build_split(epoch_index = X_epoch_index,
-                                            epoch_thumb = X_epoch_thumb,
-                                            index_trials_indices = test_i,
-                                            thumb_trials_indices = test_t,
-                                            fs = FREQ)
-    print('Test 1 segment : ', X_test[0, 0:10, 2])
-    print('Test 2 segment : ', X_test[7, 30:40, 1])
-    print('Test 3 segment : ', X_test[17, 90:100, 0])'''
+    # summary_accuracies()
