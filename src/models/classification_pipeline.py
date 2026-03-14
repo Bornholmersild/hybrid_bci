@@ -201,18 +201,14 @@ class SingleNet_LSTM(nn.Module):
         super().__init__()
         self.bidirectional = bidirectional
 
-        if bidirectional:                       # For Bi-LSTM : hidden units is doubled
-            dense_hidden_layers = hidden_dim * 2
-        else:
-            dense_hidden_layers = hidden_dim
-        
+        dense_hidden_layers = hidden_dim * 2 if bidirectional else hidden_dim
         dense_layers = max(8, int(dense_hidden_layers * dense_ratio))
 
         self.lstm = nn.LSTM(input_size = input_dim, 
                             hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
                             num_layers = lstm_layers, 
                             batch_first = True,                  # Data input will be (batch, seq_len, channels)
-                            dropout = dropout,
+                            dropout = dropout if lstm_layers > 1 else 0,
                             bidirectional = bidirectional)       # Input dim (batch size, sequence length, input_size)
 
         activations = {
@@ -354,11 +350,7 @@ class SingleNet_CNN_LSTM(nn.Module):
         '''
         self.bidirectional = bidirectional
 
-        if bidirectional:                       # For Bi-LSTM : hidden units is doubled
-            dense_hidden_layers = hidden_dim * 2
-        else:
-            dense_hidden_layers = hidden_dim
-        
+        dense_hidden_layers = hidden_dim * 2 if bidirectional else hidden_dim  
         dense_layers = max(8, int(dense_hidden_layers * dense_ratio))
 
         activations = {
@@ -391,7 +383,7 @@ class SingleNet_CNN_LSTM(nn.Module):
             hidden_size = hidden_dim,
             num_layers = lstm_layers,
             batch_first = True,
-            dropout = dropout,
+            dropout = dropout if lstm_layers > 1 else 0,
             bidirectional = bidirectional
         )
 
@@ -447,17 +439,28 @@ class SingleNet_CNN_LSTM(nn.Module):
 
         return logits, _, _        # None is placeholders
 
-class FusionNet(nn.Module):
-    def __init__(self, eeg_ch, emg_ch, hidden=32, lstm_layers = 1, num_classes=2, dropout = 0.3, activation = 'relu'):
+class FusionNet_LSTM(nn.Module):
+    def __init__(self, eeg_dim : np.ndarray, emg_dim : np.ndarray, eeg_output_dim : int, emg_output_dim : int, output_dim : int, hidden_dim : int, lstm_layers : int, bidirectional : bool, dropout : float, activation : str, dense_ratio : int, dense_fusion_layer : int):
         super().__init__()
 
-        num_biosignals = 2
-        first_layer = (hidden * num_biosignals) // 2    # (64) // 2 = 32
+        self.bidirectional = bidirectional
 
-        self.eeg_lstm = nn.LSTM(input_size = eeg_ch, hidden_size = hidden, num_layers = lstm_layers, batch_first=True)
-        self.emg_lstm = nn.LSTM(input_size = emg_ch, hidden_size = hidden, num_layers = lstm_layers, batch_first=True)
+        dense_hidden_layers = hidden_dim * 2 if bidirectional else hidden_dim
+        dense_layers = max(8, int(dense_hidden_layers * dense_ratio))
 
-        self.attension = Attension(hidden_dim = hidden * num_biosignals)
+        self.eeg_lstm = nn.LSTM(input_size = eeg_dim, 
+                            hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
+                            num_layers = lstm_layers, 
+                            batch_first = True,                  # Data input will be (batch, seq_len, channels)
+                            dropout = dropout if lstm_layers > 1 else 0,
+                            bidirectional = bidirectional)       # Input dim (batch size, sequence length, input_size)
+        
+        self.emg_lstm = nn.LSTM(input_size = emg_dim, 
+                            hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
+                            num_layers = lstm_layers, 
+                            batch_first = True,                  # Data input will be (batch, seq_len, channels)
+                            dropout = dropout if lstm_layers > 1 else 0,
+                            bidirectional = bidirectional)       # Input dim (batch size, sequence length, input_size)
 
         # WHAT OTHER ACTIVATIONS IS OF INTERST?
         activations = {
@@ -466,24 +469,56 @@ class FusionNet(nn.Module):
         }
         act = activations[activation]
 
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden * num_biosignals, first_layer),            # 64
+        self.eeg_dense = nn.Sequential(
+            nn.Linear(dense_hidden_layers, dense_layers),            # 64
             act,
             nn.Dropout(dropout),
-            nn.Linear(first_layer, num_classes)
+            nn.Linear(dense_layers, eeg_output_dim)
         )
 
-    def forward(self, eeg, emg):
-        lstm_out_eeg, _ = self.eeg_lstm(eeg)          # lstm_out (batch, seq_len, hidden), h (1, batch, hidden)
-        lstm_out_emg, _ = self.emg_lstm(emg)
-        
-        fused_seq = torch.cat([lstm_out_eeg, lstm_out_emg], dim=2)  # (batch, seq, hidden*2)
-        
-        context, attn_weights = self.attension(fused_seq)
-        
-        logits = self.classifier(context)
+        self.emg_dense = nn.Sequential(
+            nn.Linear(dense_hidden_layers, dense_layers),            # 64
+            act,
+            nn.Dropout(dropout),
+            nn.Linear(dense_layers, emg_output_dim)
+        )
 
-        return logits, context, attn_weights                        # Return dim : (batch, hidden_states for num_clases)
+        self.fusion_dense = nn.Sequential(
+            nn.Linear(emg_output_dim + eeg_output_dim, dense_fusion_layer),            # 8 -> 16
+            act,
+            nn.Dropout(dropout),
+            nn.Linear(dense_fusion_layer, output_dim)                     # 16 -> 5
+        )
+
+    def _extract_hidden(self, hn):
+        """Extract final hidden state from LSTM"""
+        if self.bidirectional:
+            h_forward = hn[-2]                                          # (1, batch, hidden)
+            h_backward = hn[-1]                                         # (1, batch, hidden)
+            h_final = torch.cat((h_forward, h_backward), dim=1)         # Concat -> (batch, hidden * 2)
+        else:
+            h_final = hn[-1]                                            # (batch, hidden)
+
+        return h_final
+
+    def forward(self, eeg, emg):
+
+        # EEG branch
+        _, (hn_eeg, _) = self.eeg_lstm(eeg)             # Final LSTM hidden layer : hn (bi * num_layers, batch, hidden) - bi = 2 if bidirectional == True
+        h_eeg = self._extract_hidden(hn_eeg)            # Last two elements contain final forward and final reverse hidden states
+        eeg_logits = self.eeg_dense(h_eeg)
+
+        # EMG branch
+        _, (hn_emg, _) = self.emg_lstm(emg)
+        h_emg = self._extract_hidden(hn_emg)
+        emg_logits = self.emg_dense(hn_emg)
+
+        # Late fusion
+        fusion_input = torch.cat([eeg_logits, emg_logits], dim=1)
+
+        fusion_logits = self.fusion_dense(fusion_input)
+
+        return fusion_logits, eeg_logits, emg_logits, _, _
 
 class SingleManageDataset(torch.utils.data.Dataset):
     def __init__(self, data, labels):
@@ -508,21 +543,34 @@ class SingleManageDataset(torch.utils.data.Dataset):
         return self.data[idx], self.labels[idx]
 
 class MultiManageDataset(torch.utils.data.Dataset):
-    def __init__(self, eeg, emg, labels):
+    def __init__(self, eeg, emg, eeg_labels, emg_labels):
+        map_labels = self._map_to_emg_labels(eeg_labels)
+
         self.eeg = torch.tensor(eeg, dtype=torch.float32)
         self.emg = torch.tensor(emg, dtype=torch.float32)
-        self.labels = torch.tensor(labels, dtype=torch.long)
-        self.rng = np.random.default_rng(SEED)
+        self.eeg_labels = torch.tensor(map_labels, dtype=torch.long)
+        self.emg_labels = torch.tensor(emg_labels, dtype=torch.long)
 
         print('eeg shape:', self.eeg.shape)
         print('emg shape:', self.emg.shape)
-        print('labels shape:', self.labels.shape)
+        print('eeg labels shape:', self.eeg_labels.shape)
+        print('emg labels shape:', self.emg_labels.shape)
+    
+    def _map_to_emg_labels(self, labels):
+    
+        map_labels = labels.copy()
+
+        map_labels[(labels == 0) | (labels == 2)] = 0
+        map_labels[(labels == 1) | (labels == 3)] = 1
+        map_labels[labels == 4] = 2
+
+        return map_labels
     
     def __len__(self):
-        return len(self.labels)
+        return len(self.eeg_labels)
 
     def __getitem__(self, idx):
-        return self.eeg[idx], self.emg[idx], self.labels[idx]
+        return self.eeg[idx], self.emg[idx], self.eeg_labels[idx], self.emg_labels[idx]
 
 class Manage3Split:
     '''
@@ -537,8 +585,61 @@ class Manage3Split:
             For np.random generator
         '''
         self.rng = np.random.default_rng(seed)
+    
+    def build_modality_split(self, num_index_trials : int, num_thumb_trials : int, epoch_index : np.ndarray, epoch_thumb : np.ndarray, fs : int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        '''
+        Random shuffle indicies for trials and divide into train, validation and test dataset.
 
-    def build_split(self, 
+        Parameters
+        ----------
+        num_index_trials : int
+            Number of trials from X_epoch_index.shape[0]
+        num_thumb_trials : int
+            Number of trials from X_epoch_thumb.shape[0]
+        epoch_index : np.ndarray
+            Array of data given in epochs. Shape (Epochs, sequence, channels)
+        epoch_thumb : np.ndarray
+            Array of data given in epochs. Shape (Epochs, sequence, channels)
+        fs : int
+            Sampling frequency for either EEG or EMG
+
+        Returns
+        ----------
+        X_train : np.ndarray
+        X_val : np.ndarray 
+        X_test : np.ndarray
+        y_train : np.ndarray
+        y_val : np.ndarray
+        y_test : np.ndarray 
+        '''
+        train_i, val_i, test_i = self._split_trials(num_index_trials)
+        train_t, val_t, test_t = self._split_trials(num_thumb_trials)
+
+        # EEG train, validation and test datasplit
+        X_train, y_train = self._build_split(                   # Train data split
+            epoch_index = epoch_index,
+            epoch_thumb = epoch_thumb,
+            index_trials_indices = train_i,
+            thumb_trials_indices = train_t,
+            fs = fs)
+        
+        X_val, y_val = self._build_split(                       # Validation data split
+            epoch_index = epoch_index,
+            epoch_thumb = epoch_thumb,
+            index_trials_indices = val_i,
+            thumb_trials_indices = val_t,
+            fs = fs)
+        
+        X_test, y_test = self._build_split(
+            epoch_index = epoch_index,
+            epoch_thumb = epoch_thumb,
+            index_trials_indices = test_i,
+            thumb_trials_indices = test_t,
+            fs = fs)
+        
+        return X_train, X_val, X_test, y_train, y_val, y_test
+
+    def _build_split(self, 
                     epoch_index : np.ndarray,
                     epoch_thumb : np.ndarray,
                     index_trials_indices : list,
@@ -564,6 +665,9 @@ class Manage3Split:
         fs : int
             Sampling frequency
 
+        data_type : str
+            Either EEG or EMG. Purpose -> To define different amount of classes
+
         Returns
         ----------
         X : np.ndarray
@@ -580,23 +684,8 @@ class Manage3Split:
         # Segment
         rest_i, contract_i, release_i = self._segment_trials(index_sel, fs)
         rest_t, contract_t, release_t = self._segment_trials(thumb_sel, fs)
-        
-        # FOR EEG
+    
         X = np.concatenate([
-            np.concatenate([contract_i, contract_t], axis=0),
-            np.concatenate([release_i, release_t], axis=0),
-            np.concatenate([rest_i, rest_t], axis=0)
-        ])
-
-        # Build labels
-        y = np.concatenate([
-            np.full(len(contract_i) + len(contract_t), 0),                    # 0 index_contract
-            np.full(len(release_i) + len(release_t), 1),
-            np.full(len(rest_i) + len(rest_t), 2)
-        ])
-
-        # Build features
-        '''X = np.concatenate([
             contract_i,
             release_i,
             contract_t,
@@ -604,7 +693,6 @@ class Manage3Split:
             np.concatenate([rest_i, rest_t])
         ])
 
-        # Build labels
         y = np.concatenate([
             np.zeros(len(contract_i)),                    # 0 index_contract
             np.ones(len(release_i)),                      # 1 index_release
@@ -612,10 +700,10 @@ class Manage3Split:
             np.full(len(release_t), 3),                   # 3 thumb_release
             np.full(len(rest_i)+len(rest_t), 4)           # 4 rest
         ])
-'''
+    
         return X, y
 
-    def split_trials(self, num_trials : int, train_ratio : int = 0.7) -> tuple[list, list, list]:
+    def _split_trials(self, num_trials : int, train_ratio : int = 0.7) -> tuple[list, list, list]:
         '''
         Provide indices for a train-validation-test split. Used per finger motion
 
@@ -754,7 +842,7 @@ def kernel_from_ratio(seq_len, ratio, min_kernel = 3):
     
     return kernel_size
 
-def load_classfication(subject_name : str | list):
+def singleNet_classfication(subject_name : str | list):
     # When chancing between EEG and EMG
     # preprocessing instance
     # Load function
@@ -1025,11 +1113,267 @@ def load_classfication(subject_name : str | list):
         # writer.close()
         study.finalize(trial, status = 'COMPLETED')
 
+def fusionNet_classfication(subject_name : str | list):
+    # When chancing between EEG and EMG
+    # preprocessing instance
+    # Load function
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
+
+    LOG_NAME = f'{subject_name}'
+    log_dir = Path(__file__).resolve().parent / f'loggings/FusionNet_CNN+LSTM_EEG_TEST/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    logger_ins = ExperimentLogger(save_path = log_dir)
+    load_ins = load_datasets(base_dir = data_dir)
+    split_ins = Manage3Split(seed = SEED)
+    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+
+    #===========#
+    # Load data #
+    #===========#
+    EEG_epoch_index, EMG_epoch_index, _, _ = load_ins.load_EEG_EMG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, EEG_preprocessing_func = EEG_ins.preprocessing_routine, EMG_preprocessing_func = EMG_ins.preprocessing_routine, EMG_config_dict = EMG_CONFIG_DICT, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    EEG_epoch_thumb, EMG_epoch_thumb, _, _ = load_ins.load_EEG_EMG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, EEG_preprocessing_func = EEG_ins.preprocessing_routine, EMG_preprocessing_func = EMG_ins.preprocessing_routine, EMG_config_dict = EMG_CONFIG_DICT, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+
+    num_index_trials = EEG_epoch_index.shape[0]
+    num_thumb_trials = EEG_epoch_thumb.shape[0]
+
+    X_EEG_train, X_EEG_val, X_EEG_test, y_EEG_train, y_EEG_val, y_EEG_test = split_ins.build_modality_split(
+        num_index_trials = num_index_trials,
+        num_thumb_trials = num_thumb_trials,
+        epoch_index = EEG_epoch_index,
+        epoch_thumb = EEG_epoch_thumb,
+        fs = EEG_FREQ
+    )
+
+    X_EMG_train, X_EMG_val, X_EMG_test, y_EMG_train, y_EMG_val, y_EMG_test = split_ins.build_modality_split(
+        num_index_trials = num_index_trials,
+        num_thumb_trials = num_thumb_trials,
+        epoch_index = EMG_epoch_index,
+        epoch_thumb = EMG_epoch_thumb,
+        fs = RMS_FREQ
+    )
+
+    _, EEG_num_samples, EEG_num_channels = X_EEG_train.shape
+    _, EMG_num_samples, EMG_num_channels = X_EMG_train.shape
+
+    #=======================#
+    # Multi fusion datasets #
+    #=======================#
+    train_eval_ins = FusionNet_train_eval()
+
+    print('\nTraining dataset shapes:')
+    train_dataset_ins = MultiManageDataset(X_EEG_train, X_EMG_train, y_EEG_train, y_EMG_train)
+    print('Validation dataset shapes:')
+    val_dataset_ins = MultiManageDataset(X_EEG_val, X_EMG_val, y_EEG_val, y_EMG_val)
+    print('Testing dataset shapes:')
+    test_dataset_ins = MultiManageDataset(X_EEG_test, X_EMG_test, y_EEG_test, y_EMG_test)
+
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 10             # 75 - 250 (simply to max) 
+    EEG_CH = EEG_num_channels
+    EMG_CH = EMG_num_channels
+    EEG_CLASSES = 3
+    EMG_CLASSES = 5
+    TOTAL_CLASSES = EMG_CLASSES
+    NUM_EPOCHS = 10                 # 150 - 200
+    PATIENCE = 25                   # Early stopping patience - 25
+    NUM_INITIAL_DATA_POINTS = 125
+
+    #====================================#
+    # SHERPA Hyperparameter Optimazation #
+    #====================================#
+
+    parameters = [
+        sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
+        sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),  
+        sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
+
+        sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
+        sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.75, 1.0]),
+        sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
+        sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
+        sherpa.Ordinal(name='kernel_ratio', range=[0.01, 0.02, 0.03, 0.04, 0.1]), # , 0.125, 0.25, 0.5                    # kernel/fs -> (3/40, ) -> (75, 175, 275, 375) ms'
+        
+        sherpa.Choice(name='activation', range=['relu', 'elu']),
+        sherpa.Choice(name="bidirectional", range=[False, True]),                      
+        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
+    ]
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
+    )
+    # Study represents the hyperparameter optimization itself
+    study = sherpa.Study(
+        parameters = parameters,
+        algorithm = algorithm,
+        lower_is_better = True,
+        disable_dashboard = True
+    )
+
+    for trial in study:
+        # Overall
+        dropout = trial.parameters['dropout']       
+        batch_size = trial.parameters['batch_size']
+        activation = trial.parameters['activation'] 
+        dense_ratio = trial.parameters['dense_ratio']
+        weight_decay = trial.parameters["weight_decay"]
+        lr = trial.parameters["learning_rate"]
+
+        # LSTM
+        num_hidden_units = trial.parameters['num_hidden_units']
+        lstm_layers = trial.parameters['lstm_layers']
+        bidirectional = trial.parameters['bidirectional']   
+        
+        # CNN
+        # cnn_filters = trial.parameters['cnn_filters']
+        # kernel_ratio = trial.parameters['kernel_ratio']
+        # EEG_kernel_size = kernel_from_ratio(seq_len = EEG_num_samples, ratio = kernel_ratio, min_kernel = 3)
+        # EMG_kernel_size = kernel_from_ratio(seq_len = EMG_num_samples, ratio = kernel_ratio, min_kernel = 3)
+
+        #=======================#
+        # Multi fusion datasets #
+        #=======================#
+        model = FusionNet_LSTM(eeg_dim = EEG_CH,
+                               emg_dim = EMG_CH,
+                               eeg_output_dim = EEG_CLASSES,
+                               emg_output_dim = EMG_CLASSES,
+                               output_dim = TOTAL_CLASSES,
+                               hidden_dim = num_hidden_units,
+                               lstm_layers = lstm_layers,
+                               bidirectional = bidirectional,
+                               dropout = dropout,
+                               activation = activation, 
+                               dense_ratio = dense_ratio,
+                               dense_fusion_layer = 16)         # 8 layers -> 16 layers -> 5 classes
+        
+        model.to(device)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = lr, weight_decay = weight_decay)
+
+        # DataLoaders (update batch_size)
+        train_loader = DataLoader(train_dataset_ins, batch_size = batch_size, shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(val_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(test_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+
+        best_train_loss = None
+        best_val_loss = float("inf")
+        best_val_acc = None
+
+        best_epoch = 0
+        best_state_dict = None
+        early_stopping_counter = 0
+
+        # Create log folder
+        log_folder = os.path.join(log_dir, f"trial_{trial.id}")
+        os.makedirs(log_folder, exist_ok=False)
+        # writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
+
+        for epoch in range(NUM_EPOCHS):
+
+            # Train model
+            avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
+
+            # Validate model
+            avg_vloss, vacc, _ = train_eval_ins.validation_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+            
+            # Tensor Board logging
+            # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
+            # writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
+            # writer.flush()
+
+            study.add_observation(trial = trial,
+                                iteration = epoch,
+                                objective = avg_vloss)
+
+            # Track best performance, and save the model's state
+            if avg_vloss < best_val_loss:
+                best_val_loss = avg_vloss
+                best_epoch = epoch
+
+                best_state_dict = deepcopy(model.state_dict())
+                best_optimizer_dict = deepcopy(optimizer.state_dict())
+ 
+                best_train_loss = avg_train_loss
+                best_val_acc = vacc
+
+                early_stopping_counter = 0
+
+            else:
+                early_stopping_counter += 1
+
+                if early_stopping_counter >= PATIENCE:
+                    break
+
+            print(
+                f'{subject_name} | '
+                f'Trial {trial.id}/{MAX_NUM_TRIALS} | '
+                f'Epoch {epoch+1}/{NUM_EPOCHS} | '
+                f'Train {avg_train_loss:.4f} | '
+                f'Val {avg_vloss:.4f} | '
+                f'Acc {vacc:.2f} |',
+                f'Early stopping {early_stopping_counter} |',
+                end='\r',
+                flush=True
+            )
+
+        model.load_state_dict(best_state_dict)
+
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
+
+        model_arg = {
+            "eeg_dim": EEG_CH,
+            "emg_dim": EMG_CH,
+            "output_dim" : TOTAL_CLASSES,
+            "hidden_dim": num_hidden_units,
+            "lstm_layers": lstm_layers,
+            "bidirectional" : bidirectional,
+            "dropout": dropout,
+            "activation": activation,
+            "dense_ratio": dense_ratio,}
+            
+        torch.save({
+            "model_state": best_state_dict,
+            "model_args": model_arg, 
+            "optimizer_state_dict": best_optimizer_dict,
+            "hyperparameters": trial.parameters,}, 
+            r'{}\model.pth'.format(log_folder))
+        
+        logger_ins.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = best_epoch,
+            train_loss = best_train_loss,
+            val_loss = best_val_loss,
+            val_acc = best_val_acc,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+
+        # writer.close()
+        study.finalize(trial, status = 'COMPLETED')
+
+#===============#
+# Check results #
+#===============#
+
 def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
     # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
 
             
-    sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
+    #sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
+    sherpa_info_path = Path(__file__).resolve().parent / f"sherpa_loggings/SingleNet_CNN+LSTM_EEG/{subject_name}SHERPA_results.pt"
     if not os.path.exists(sherpa_info_path):
         raise FileExistsError(sherpa_info_path)
     data = torch.load(sherpa_info_path, weights_only=False)
@@ -1451,10 +1795,10 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
 def main():
     t0 = time.time()
-    subjects = ['subject_1', 'subject_2']
+    subjects = ['subject_0']
 
     for subject in subjects:
-        load_classfication(subject_name = subject)
+        fusionNet_classfication(subject_name = subject)
 
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
@@ -1471,7 +1815,7 @@ def summary_accuracies():
     },
 
     "CNN+LSTM":{
-        "EEG":[0, 0, 0],
+        "EEG":[75.3, 66.7, 75.0],
         "EMG":[100, 95, 100],
         "Fusion":[0, 0, 0]
     },
@@ -1488,10 +1832,13 @@ def summary_accuracies():
 
 
 if __name__ == '__main__':
-    # main()
+    main()
     # inspect_model_SNE(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
     
-    for subj in ['subject_0']:
-        inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
+    
+    # inspect_model(subject_name=1)
+    # for subj in ['subject_0']:
+    #     inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_CNN+LSTM_EEG')
 
     # summary_accuracies()
+    

@@ -137,7 +137,7 @@ class load_datasets():
         reject_ins = RejectBadEpochs(base_dir = self.base_dir)
 
         #================#
-        # Find EMG files #
+        # Find EEG files #
         #================#
         EEG_files = self.find_flex_files(
             subjects = subject_name,
@@ -274,18 +274,82 @@ class load_datasets():
         
         return RMS, EMG, epochs_overview
 
-    def load_datasets(self, 
-                      path_to_EEG_files : Union[list | Path],
-                      path_to_EMG_files : Union[list | Path],
-                      EEG_preprocessing_func : Callable,
-                      EMG_preprocessing_func : Callable,
-                      EMG_config_dict : dict) -> tuple[list, list, list, int]:
+    def load_EEG_EMG_data(self, 
+                          subject_name : str | list,
+                          finger_name : str,
+                          reject_config_dict : dict,
+                          EEG_preprocessing_func : Callable,
+                          EMG_preprocessing_func : Callable,
+                          EMG_config_dict : dict,
+                          EEG_useable_channels : list | None) -> tuple[list, list, list, int]:
+
+        reject_ins = RejectBadEpochs(base_dir = self.base_dir)
+
+        #=================#
+        # Find data files #
+        #=================#
+        EEG_files = self.find_flex_files(
+            subjects = subject_name,
+            modality = "EEG",
+            fingers = finger_name,
+            prefix = 'flex'
+        )
+
+        EMG_files = self.find_flex_files(
+            subjects = subject_name,
+            modality = "EMG",
+            fingers = finger_name,
+            prefix = 'flex'
+        )        
+
+        EEG, RMS, EMG, epochs_overview = self._extract_EEG_EMG_data(path_to_EEG_files = EEG_files,
+                                                                    path_to_EMG_files = EMG_files,
+                                                                    EEG_preprocessing_func = EEG_preprocessing_func,
+                                                                    EMG_preprocessing_func = EMG_preprocessing_func,
+                                                                    EMG_config_dict = EMG_config_dict)
         
+        reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files,
+                                                epochs_overview = epochs_overview,
+                                                EEG_data = EEG,
+                                                RMS_data = RMS,
+                                                reject_config_dict = reject_config_dict,
+                                                EEG_useable_channels = EEG_useable_channels)
+    
+    
+        EEG = EEG[:, EEG_useable_channels].copy() if EEG_useable_channels is not None else EEG.copy()
+
+        total_epochs = sum(epochs_overview)
+        EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
+        RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, RMS.shape[1])
+        EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, EMG.shape[1]) if EMG is not None else None
+
+        EEG_epoch_clean = EEG_epoch[~reject_mask]
+        RMS_epoch_clean = RMS_epoch[~reject_mask]
+        EMG_epoch_clean = EMG_epoch[~reject_mask] if EMG is not None else None
+
+        EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
+        
+        filt_ins = Filtering()
+        EEG_epoch_norm = filt_ins.zscore(EEG_car, mode = 'within_ch')
+        RMS_epoch_norm = filt_ins.zscore(RMS_epoch_clean, mode = 'within_ch')
+        EMG_epoch_norm = filt_ins.zscore(EMG_epoch_clean, mode = 'within_ch') if EMG is not None else None
+
+        return EEG_epoch_norm, RMS_epoch_norm, EMG_epoch_norm, epochs_overview
+
+    def _extract_EEG_EMG_data(self,
+                              path_to_EEG_files : Union[list | Path],
+                              path_to_EMG_files : Union[list | Path],
+                              EEG_preprocessing_func : Callable,
+                              EMG_preprocessing_func : Callable,
+                              EMG_config_dict : dict):
+        print('-------------------------\n'
+              'Process for EEG and EMG data\n'
+              '-------------------------\n')
         if isinstance(path_to_EEG_files, Path):
             path_to_EEG_files = [path_to_EEG_files]
         if isinstance(path_to_EMG_files, Path):
             path_to_EMG_files = [path_to_EMG_files]
-
+        
         epochs_overview = []
         all_EEG_data = []
         all_EMG_data = []
@@ -316,15 +380,14 @@ class load_datasets():
             all_EEG_data.append(EEG_temp)
             all_RMS_data.append(RMS_temp)
             all_EMG_data.append(EMG_temp) if EMG_config_dict['include_EMG'] else None
-
             epochs_overview.append(EMG_num_epochs)
 
         EEG = np.concatenate(all_EEG_data, axis = 0)
         RMS = np.concatenate(all_RMS_data, axis = 0)
         EMG = np.concatenate(all_EMG_data, axis = 0) if EMG_config_dict['include_EMG'] else None
-        
-        return EEG, RMS, EMG, epochs_overview
 
+        return EEG, RMS, EMG, epochs_overview
+    
     def make_dataset_key(self):
         '''
         A method to append 'subject_ID / experiment_name' to JSON file with empty bad epoch list. 
