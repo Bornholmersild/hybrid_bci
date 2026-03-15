@@ -96,8 +96,6 @@ class FusionNet_train_eval():
 
                 loss_eeg_all += 0.3 * loss_eeg
                 loss_emg_all += 0.3 * loss_emg
-        
-        print(f'EEG loss : {loss_eeg_all / len(val_loader)} || EMG loss : {loss_emg_all / len(val_loader)}')
 
         avg_vloss = running_vloss / len(val_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal
