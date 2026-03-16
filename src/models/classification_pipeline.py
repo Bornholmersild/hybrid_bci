@@ -511,7 +511,7 @@ class FusionNet_LSTM(nn.Module):
         # EMG branch
         _, (hn_emg, _) = self.emg_lstm(emg)
         h_emg = self._extract_hidden(hn_emg)
-        emg_logits = self.emg_dense(hn_emg)
+        emg_logits = self.emg_dense(h_emg)
 
         # Late fusion
         fusion_input = torch.cat([eeg_logits, emg_logits], dim=1)
