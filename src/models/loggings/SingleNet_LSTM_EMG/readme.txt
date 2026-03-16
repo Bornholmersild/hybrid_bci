@@ -9,8 +9,8 @@
 
         # LSTM
         sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
-        sherpa.Choice(name="bidirectional", range=[False, True]),                      
-        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
+        # sherpa.Choice(name="bidirectional", range=[False, True]),                      
+        # sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
 
         # CNN
         # sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
@@ -18,11 +18,9 @@
         # sherpa.Ordinal(name='EMG_kernel_ratio', range=[X]),   # EEG : 3.75, 7.5, 11.25, 15, 37.5
     ]
 
-    MAX_NUM_TRIALS = 250             # 75 - 250 (simply to max) 
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
     DATA_CH = num_channels
-    NUM_CLASSES = 3
+    NUM_CLASSES = 5 if data_type == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
-    PATIENCE = 25                   # Early stopping patience - 25
-    NUM_INITIAL_DATA_POINTS = 125
-
-    accuracy : 95-100 % across 3 subjects
+    PATIENCE = 25 if data_type == 'EMG' else 50                   # Early stopping patience - 25
+    NUM_INITIAL_DATA_POINTS = 20

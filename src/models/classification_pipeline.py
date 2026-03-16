@@ -1015,7 +1015,7 @@ def kernel_from_ratio(seq_len, ratio, min_kernel = 3):
     
     return kernel_size
 
-def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'SingleNet_LSTM_EMG'):
+def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', data_type : str = None):
     # When chancing between EEG and EMG
     # preprocessing instance
     # Load function
@@ -1027,7 +1027,7 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
     LOG_NAME = f'{subject_name}'
     log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
-    
+    data_type = str.upper(data_type)
     #==========================#
     # NOTE: Tensorboard config #
     #==========================#
@@ -1037,26 +1037,35 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
     logger_ins = ExperimentLogger(save_path = log_dir)
     load_ins = load_datasets(base_dir = data_dir)
     split_ins = Manage3Split(seed = SEED)
-    # EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
-    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    
+    if data_type == 'EMG':
+        EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    elif data_type == 'EEG':
+        EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    else:
+        raise ValueError('data_type must be either EMG or EEG')
 
     #===========#
     # Load data #
     #===========#
-    # X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-    # X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-    X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
-    X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    if data_type == 'EMG':
+        X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+        X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+    else:
+        X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+        X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
 
     num_index_trials = X_epoch_index.shape[0]
     num_thumb_trials = X_epoch_thumb.shape[0]
+
+    FREQ = RMS_FREQ if data_type == 'EMG' else EEG_FREQ
 
     X_train, X_val, X_test, y_train, y_val, y_test = split_ins.build_modality_split(
         num_index_trials = num_index_trials,
         num_thumb_trials = num_thumb_trials,
         epoch_index = X_epoch_index,
         epoch_thumb = X_epoch_thumb,
-        fs = EEG_FREQ
+        fs = FREQ
     )
     
     _, num_samples, num_channels = X_train.shape
@@ -1067,21 +1076,21 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
     train_eval_ins = SingleNet_train_eval()
 
     print('\nTraining dataset shapes:')
-    train_dataset_ins = SingleManageDataset(X_train, y_train, data_type = 'EEG')
+    train_dataset_ins = SingleManageDataset(X_train, y_train, data_type = data_type)
     print('Validation dataset shapes:')
-    val_dataset_ins = SingleManageDataset(X_val, y_val, data_type = 'EEG')
+    val_dataset_ins = SingleManageDataset(X_val, y_val, data_type = data_type)
     print('Testing dataset shapes:')
-    test_dataset_ins = SingleManageDataset(X_test, y_test, data_type = 'EEG')
+    test_dataset_ins = SingleManageDataset(X_test, y_test, data_type = data_type)
 
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 150             # 75 - 250 (simply to max) 
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
     DATA_CH = num_channels
-    NUM_CLASSES = 3
+    NUM_CLASSES = 5 if data_type == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
-    PATIENCE = 50                   # Early stopping patience - 25
-    NUM_INITIAL_DATA_POINTS = 125
+    PATIENCE = 25 if data_type == 'EMG' else 50                   # Early stopping patience - 25
+    NUM_INITIAL_DATA_POINTS = 20
     
     #===========#
     # Constants #
@@ -1103,8 +1112,8 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
 
         # LSTM
         sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
-        sherpa.Choice(name="bidirectional", range=[False, True]),                      
-        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
+        # sherpa.Choice(name="bidirectional", range=[False, True]),                      
+        # sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
 
         # CNN
         # sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
@@ -1137,8 +1146,8 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
 
         # LSTM
         num_hidden_units = trial.parameters['num_hidden_units']
-        lstm_layers = trial.parameters['lstm_layers']
-        bidirectional = trial.parameters['bidirectional']   
+        lstm_layers = 1 #trial.parameters['lstm_layers']
+        bidirectional = False #trial.parameters['bidirectional']   
         
         # CNN
         # cnn_filters = trial.parameters['cnn_filters']
@@ -1578,20 +1587,20 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
 
             
-    #sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
+    # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/SHERPA_results.pt"
     if not os.path.exists(sherpa_info_path):
         raise FileExistsError(sherpa_info_path)
     data = torch.load(sherpa_info_path, weights_only=False)
 
-    '''# Extract test accuracies
+    # Extract test accuracies
     acc_list = [trial['validation_loss'] for trial in data['trials']]
 
     # Get indices sorted from highest → lowest accuracy
     sorted_indices = sorted(range(len(acc_list)), key=lambda i: acc_list[i], reverse=False)
 
     # Iterate over trials in sorted order
-    for rank, idx in enumerate(sorted_indices):
+    '''for rank, idx in enumerate(sorted_indices):
         trial = data['trials'][idx]
 
         print('Rank:', rank + 1)
@@ -1603,20 +1612,21 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('Test accuracy:', trial['test_accuracy'])
         print('Hyperparameters:\n', trial['hyperparameters'], '\n')
         if rank > 10:
-            break
+            break'''
     
     print('Last ten')
-    for idx in range(240, 250):
+    data_len = len(data['trials'])
+    for idx in range(data_len - 50, data_len):
         trial = data['trials'][idx]
 
-        print('Rank:', rank + 1)
+        # print('Rank:', rank + 1)
         print('Trial:', idx + 1)
         print('Epochs', trial['best_epoch'])
         print('Training loss:' , trial['training_loss'])
         print('Validation loss:', trial['validation_loss'])
         print('Validation accuracy:', trial['validation_accuracy'])
         print('Test accuracy:', trial['test_accuracy'])
-        print('Hyperparameters:\n', trial['hyperparameters'], '\n')'''
+        print('Hyperparameters:\n', trial['hyperparameters'], '\n')
 
     best_vloss = min(
         data["trials"],
@@ -2168,7 +2178,7 @@ def main():
 
     for subject in subjects:
         # fusionNet_classfication(subject_name = subject)
-        singleNet_classfication(subject_name = subject)
+        singleNet_classfication(subject_name = subject, sherpa_log_folder = 'SingleNet_LSTM_EMG', data_type = 'EMG')
 
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
@@ -2180,7 +2190,7 @@ def summary_accuracies():
 
     "LSTM":{
         "EEG":[59.3, 41.7, 58.3],
-        "EMG":[76.5, 81.5, 92.6],
+        "EMG":[92.6, 82.7, 96.3],
         "Fusion":[93.6, 80.2, 96.0]
     },
 
@@ -2203,12 +2213,13 @@ def summary_accuracies():
 
 if __name__ == '__main__':
     # main()
-    fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
+    # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
     # singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EMG')
 
-    # # # inspect_model(subject_name=1)
-    # for subj in ['subject_0', 'subject_1', 'subject_2']:
-    #     inspect_model(subject_name = subj, sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
+    # inspect_model(subject_name = 'subject_1', sherpa_log_folder = 'SingleNet_LSTM_EMG')
 
-    # summary_accuracies()
+    # for subj in ['subject_0', 'subject_1', 'subject_2']:
+    #     inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
+
+    summary_accuracies()
     
