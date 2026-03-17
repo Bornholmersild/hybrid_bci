@@ -802,21 +802,21 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_14',
+        subjects = 'subject_15',
         modality = 'EEG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_14',
+        subjects = 'subject_15',
         modality = 'EMG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_14',
+        subjects = 'subject_15',
         modality = 'Markers',
         fingers = 'thumb',
         prefix = 'flex'
@@ -858,7 +858,7 @@ def quick_visulize():
 
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
-    vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+    # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 def test_bad_epochs():
     EEG_FREQ = 125
