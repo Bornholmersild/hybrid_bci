@@ -1076,8 +1076,8 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 150             # 75 - 250 (simply to max) 
-    NUM_INITIAL_DATA_POINTS = MAX_NUM_TRIALS // 2
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 20
     DATA_CH = num_channels
     NUM_CLASSES = 3
     NUM_EPOCHS = 250                 # 150 - 200
@@ -2259,13 +2259,13 @@ def summary_accuracies():
 if __name__ == '__main__':
     # main()
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
-    # singleNet_inspect_model(subject_name = 'subject_8', sherpa_log_folder = 'SingleNet_LSTM_EMG')
+    # singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EEG')
 
     # # # inspect_model(subject_name=1)
-    for subj in ['subject_0', 'subject_1', 'subject_2']:
-        inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
+    # for subj in ['subject_0', 'subject_1', 'subject_2']:
+    #     inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
 
-    # summary_accuracies()
+    summary_accuracies()
     
 
 # SingleNet_CNN+LSTM_EEG True
