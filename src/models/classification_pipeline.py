@@ -389,7 +389,8 @@ class FusionNet_LSTM(nn.Module):
                  eeg_output_dim : int, 
                  emg_output_dim : int, 
                  output_dim : int, 
-                 hidden_dim : int, 
+                 eeg_hidden_dim : int, 
+                 emg_hidden_dim : int,
                  lstm_layers : int, 
                  bidirectional : bool, 
                  dropout : float, 
@@ -408,19 +409,19 @@ class FusionNet_LSTM(nn.Module):
         #   nn.Linear(dense_hidden_layers, dense_layers)                          #            
         #   nn.Linear(dense_layers, X_output_dim)                                 #
         #=========================================================================#
-        EEG_dense_hidden_layers = hidden_dim * 2 if bidirectional else hidden_dim
+        EEG_dense_hidden_layers = eeg_hidden_dim * 2 if bidirectional else eeg_hidden_dim
         EEG_dense_layers = max(8, int(EEG_dense_hidden_layers * dense_ratio))           # Consider bidirection
-        EMG_dense_layers = max(8, int(hidden_dim * dense_ratio))                        # Don't consider bidirection
+        EMG_dense_layers = max(8, int(emg_hidden_dim * dense_ratio))                        # Don't consider bidirection
 
         self.eeg_lstm = nn.LSTM(input_size = eeg_dim, 
-                            hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
+                            hidden_size = eeg_hidden_dim,            # Don't consider bidirectional for hidden units. 
                             num_layers = lstm_layers, 
                             batch_first = True,                  # Data input will be (batch, seq_len, channels)
                             dropout = dropout if lstm_layers > 1 else 0,
                             bidirectional = bidirectional)       # Input dim (batch size, sequence length, input_size)
         
         self.emg_lstm = nn.LSTM(input_size = emg_dim, 
-                            hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
+                            hidden_size = emg_hidden_dim,            # Don't consider bidirectional for hidden units. 
                             num_layers = 1, 
                             batch_first = True,                  # Data input will be (batch, seq_len, channels)
                             dropout = dropout if lstm_layers > 1 else 0,
@@ -441,7 +442,7 @@ class FusionNet_LSTM(nn.Module):
         )
 
         self.emg_dense = nn.Sequential(
-            nn.Linear(hidden_dim, EMG_dense_layers),            # 64
+            nn.Linear(emg_hidden_dim, EMG_dense_layers),            # 64
             act(),
             nn.Dropout(dropout),
             nn.Linear(EMG_dense_layers, emg_output_dim)
@@ -1111,7 +1112,7 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
         sherpa.Choice(name='activation', range=['relu', 'elu']),
 
         # LSTM
-        sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
+        sherpa.Ordinal(name='num_hidden_units', range=[32, 64]),          # 32, 64, 128, 256          
         # sherpa.Choice(name="bidirectional", range=[False, True]),                      
         # sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
 
@@ -1346,8 +1347,8 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 250             # 75 - 250 (simply to max) 
-    NUM_INITIAL_DATA_POINTS = MAX_NUM_TRIALS // 2
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 20
     EEG_CH = EEG_num_channels
     EMG_CH = EMG_num_channels
     EEG_CLASSES = 3
@@ -1375,14 +1376,15 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
         sherpa.Choice(name='activation', range=['relu', 'elu']),
 
         # LSTM
-        sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
+        sherpa.Ordinal(name='emg_num_hidden_units', range=[32, 64]),
+        sherpa.Ordinal(name='eeg_num_hidden_units', range=[32, 64, 128, 256]),
         sherpa.Choice(name="bidirectional", range=[False, True]),                      
         sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
 
         # CNN
-        sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
-        sherpa.Ordinal(name='EEG_kernel_ratio', range=[0.01, 0.02, 0.03, 0.04, 0.1]),   # EEG [3.75, 7.5, 11.25, 15, 37.5] samples
-        sherpa.Ordinal(name='EMG_kernel_ratio', range=[0.03, 0.06, 0.09, 0.12, 0.15]),   # EEG : 3.6, 7.2, 10.8, 14.4, 18
+        # sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
+        # sherpa.Ordinal(name='EEG_kernel_ratio', range=[0.01, 0.02, 0.03, 0.04, 0.1]),   # EEG [3.75, 7.5, 11.25, 15, 37.5] samples
+        # sherpa.Ordinal(name='EMG_kernel_ratio', range=[0.03, 0.06, 0.09, 0.12, 0.15]),   # EEG : 3.6, 7.2, 10.8, 14.4, 18
     ]
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
@@ -1409,33 +1411,34 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
         lr = trial.parameters["learning_rate"]
 
         # LSTM
-        num_hidden_units = trial.parameters['num_hidden_units']
+        emg_num_hidden_units = trial.parameters['emg_num_hidden_units']
+        eeg_num_hidden_units = trial.parameters['eeg_num_hidden_units']
         lstm_layers = trial.parameters['lstm_layers']
         bidirectional = trial.parameters['bidirectional']   
         
         # CNN
-        cnn_filters = trial.parameters['cnn_filters']
-        EEG_kernel_ratio = trial.parameters['EEG_kernel_ratio']
-        EMG_kernel_ratio = trial.parameters['EMG_kernel_ratio']
-        EEG_kernel_size = kernel_from_ratio(seq_len = EEG_num_samples, ratio = EEG_kernel_ratio, min_kernel = 3)
-        EMG_kernel_size = kernel_from_ratio(seq_len = EMG_num_samples, ratio = EMG_kernel_ratio, min_kernel = 3)
+        # cnn_filters = trial.parameters['cnn_filters']
+        # EEG_kernel_ratio = trial.parameters['EEG_kernel_ratio']
+        # EMG_kernel_ratio = trial.parameters['EMG_kernel_ratio']
+        # EEG_kernel_size = kernel_from_ratio(seq_len = EEG_num_samples, ratio = EEG_kernel_ratio, min_kernel = 3)
+        # EMG_kernel_size = kernel_from_ratio(seq_len = EMG_num_samples, ratio = EMG_kernel_ratio, min_kernel = 3)
 
         #=======================#
         # Multi fusion datasets #
         #=======================#
-        '''model = FusionNet_LSTM(eeg_dim = EEG_CH,
+        model = FusionNet_LSTM(eeg_dim = EEG_CH,
                                emg_dim = EMG_CH,
                                eeg_output_dim = EEG_CLASSES,
                                emg_output_dim = EMG_CLASSES,
                                output_dim = TOTAL_CLASSES,
-                               hidden_dim = num_hidden_units,
+                               eeg_hidden_dim = eeg_num_hidden_units,
+                               emg_hidden_dim = emg_num_hidden_units,
                                lstm_layers = lstm_layers,
                                bidirectional = bidirectional,
                                dropout = dropout,
                                activation = activation, 
-                               dense_ratio = dense_ratio,
-                               dense_fusion_layer = 16)         # 8 layers -> 16 layers -> 5 classes'''
-        model = FusionNet_CNN_LSTM(eeg_dim = EEG_CH,
+                               dense_ratio = dense_ratio)         # 8 layers -> 16 layers -> 5 classes
+        '''model = FusionNet_CNN_LSTM(eeg_dim = EEG_CH,
                                emg_dim = EMG_CH,
                                eeg_output_dim = EEG_CLASSES,
                                emg_output_dim = EMG_CLASSES,
@@ -1448,7 +1451,7 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
                                dense_ratio = dense_ratio,
                                cnn_filters = cnn_filters,
                                eeg_kernel_size = EEG_kernel_size,
-                               emg_kernel_size = EMG_kernel_size)         # 8 layers -> 16 layers -> 5 classes
+                               emg_kernel_size = EMG_kernel_size)'''         # 8 layers -> 16 layers -> 5 classes
         model.to(device)
 
         criterion = nn.CrossEntropyLoss()
@@ -1543,20 +1546,21 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
         if best_val_loss < global_best_vloss :
             global_best_vloss = best_val_loss
             # LSTM
-            '''model_arg = {
+            model_arg = {
                 "eeg_dim": EEG_CH,
                 "emg_dim": EMG_CH,
                 "eeg_output_dim" : EEG_CLASSES,
                 "emg_output_dim" : EMG_CLASSES,
                 "output_dim" : TOTAL_CLASSES,
-                "hidden_dim": num_hidden_units,
+                "eeg_hidden_dim": eeg_num_hidden_units,
+                "emg_hidden_dim": emg_num_hidden_units,
                 "lstm_layers": lstm_layers,
                 "bidirectional" : bidirectional,
                 "dropout": dropout,
                 "activation": activation,
-                "dense_ratio": dense_ratio}'''
+                "dense_ratio": dense_ratio}
             # CNN
-            model_arg = {
+            '''model_arg = {
                 "eeg_dim": EEG_CH,
                 "emg_dim": EMG_CH,
                 "eeg_output_dim" : EEG_CLASSES,
@@ -1570,7 +1574,7 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
                 "dense_ratio": dense_ratio,
                 "cnn_filters" : cnn_filters,
                 "eeg_kernel_size" : EEG_kernel_size,
-                "emg_kernel_size" : EMG_kernel_size}
+                "emg_kernel_size" : EMG_kernel_size}'''
         
             
             torch.save({
@@ -1594,13 +1598,13 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     data = torch.load(sherpa_info_path, weights_only=False)
 
     # Extract test accuracies
-    acc_list = [trial['validation_loss'] for trial in data['trials']]
+    '''acc_list = [trial['validation_loss'] for trial in data['trials']]
 
     # Get indices sorted from highest → lowest accuracy
     sorted_indices = sorted(range(len(acc_list)), key=lambda i: acc_list[i], reverse=False)
 
     # Iterate over trials in sorted order
-    '''for rank, idx in enumerate(sorted_indices):
+    for rank, idx in enumerate(sorted_indices):
         trial = data['trials'][idx]
 
         print('Rank:', rank + 1)
@@ -1614,7 +1618,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         if rank > 10:
             break'''
     
-    print('Last ten')
+    '''print('Last ten')
     data_len = len(data['trials'])
     for idx in range(data_len - 50, data_len):
         trial = data['trials'][idx]
@@ -1626,7 +1630,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('Validation loss:', trial['validation_loss'])
         print('Validation accuracy:', trial['validation_accuracy'])
         print('Test accuracy:', trial['test_accuracy'])
-        print('Hyperparameters:\n', trial['hyperparameters'], '\n')
+        print('Hyperparameters:\n', trial['hyperparameters'], '\n')'''
 
     best_vloss = min(
         data["trials"],
@@ -2174,11 +2178,11 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
 def main():
     t0 = time.time()
-    subjects = ['subject_1', 'subject_2']
+    subjects = ['subject_0']
 
     for subject in subjects:
-        # fusionNet_classfication(subject_name = subject)
-        singleNet_classfication(subject_name = subject, sherpa_log_folder = 'SingleNet_LSTM_EMG', data_type = 'EMG')
+        fusionNet_classfication(subject_name = subject, sherpa_log_folder = 'FusionNet_LSTM_FH')
+        # singleNet_classfication(subject_name = subject, sherpa_log_folder = 'SingleNet_LSTM_EMG_FH', data_type = 'EMG')
 
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
@@ -2210,16 +2214,15 @@ def summary_accuracies():
 
     _plot_subject_accuracy_hierarchical(subjects, accuracies, architectures)
 
-
 if __name__ == '__main__':
     # main()
-    # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
+    # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EMG')
 
-    # inspect_model(subject_name = 'subject_1', sherpa_log_folder = 'SingleNet_LSTM_EMG')
+    # inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
 
-    # for subj in ['subject_0', 'subject_1', 'subject_2']:
-    #     inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
+    for subj in ['subject_0', 'subject_1', 'subject_2']:
+        inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
 
-    summary_accuracies()
+    # summary_accuracies()
     
