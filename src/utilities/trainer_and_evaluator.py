@@ -66,9 +66,6 @@ class FusionNet_train_eval():
         # Set the model to evaluation mode
         model.eval()
 
-        loss_eeg_all = 0
-        loss_emg_all = 0
-
         # Disable gradient computation and reduce memory consumption.
         with torch.no_grad():
             for eeg, emg, eeg_lab, emg_lab in val_loader:
@@ -93,9 +90,6 @@ class FusionNet_train_eval():
                 # Accuracy statistics
                 vtotal += y_vemg.size(0)
                 vcorrect += (vpredicted == y_vemg).sum().item()
-
-                loss_eeg_all += 0.3 * loss_eeg
-                loss_emg_all += 0.3 * loss_emg
 
         avg_vloss = running_vloss / len(val_loader) # loss per batch
         vacc = 100 * vcorrect / vtotal

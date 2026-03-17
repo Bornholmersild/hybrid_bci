@@ -1077,11 +1077,11 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder = 'Sing
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
     MAX_NUM_TRIALS = 150             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = MAX_NUM_TRIALS // 2
     DATA_CH = num_channels
     NUM_CLASSES = 3
     NUM_EPOCHS = 250                 # 150 - 200
     PATIENCE = 50                   # Early stopping patience - 25
-    NUM_INITIAL_DATA_POINTS = 125
     
     #===========#
     # Constants #
@@ -1584,14 +1584,14 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         raise FileExistsError(sherpa_info_path)
     data = torch.load(sherpa_info_path, weights_only=False)
 
-    '''# Extract test accuracies
+    # Extract test accuracies
     acc_list = [trial['validation_loss'] for trial in data['trials']]
 
     # Get indices sorted from highest → lowest accuracy
     sorted_indices = sorted(range(len(acc_list)), key=lambda i: acc_list[i], reverse=False)
 
     # Iterate over trials in sorted order
-    for rank, idx in enumerate(sorted_indices):
+    '''for rank, idx in enumerate(sorted_indices):
         trial = data['trials'][idx]
 
         print('Rank:', rank + 1)
@@ -1604,8 +1604,8 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('Hyperparameters:\n', trial['hyperparameters'], '\n')
         if rank > 10:
             break
-    
-    print('Last ten')
+    '''
+    '''print('Last ten')
     for idx in range(240, 250):
         trial = data['trials'][idx]
 
@@ -1640,8 +1640,12 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('\n')
 
 def singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
-    model_path_folder = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}"
-    sherpa_info_path = model_path_folder / 'SHERPA_results.pt'
+    # model_path_folder = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}"
+    # sherpa_info_path = model_path_folder / 'SHERPA_results.pt'
+
+    model_path_folder = Path(__file__).resolve().parent / f"sherpa_loggings/{sherpa_log_folder}"
+    sherpa_info_path = model_path_folder / f'{subject_name}_SHERPA_results.pt'
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
 
@@ -1670,9 +1674,18 @@ def singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     checkpoint = torch.load(f = model_path, map_location = device)
 
     print(checkpoint["model_args"])
+    model_args = checkpoint["model_args"]
+
+    # Add missing arguments
+    
+    # model_args['cnn_filters'] = best['hyperparameters']['cnn_filters']
+    # model_args['kernel_size'] = best['hyperparameters']['kernel_size']
+    # model_args["eeg_output_dim"] = 3
+    # model_args["emg_output_dim"] = 5
+    # model_args["dense_fusion_layer"] = 16
 
     # model_interference = SingleNet_LSTM(**checkpoint["model_args"])
-    model_interference = SingleNet_CNN_LSTM(**checkpoint["model_args"])
+    model_interference = SingleNet_LSTM(**model_args)
 
     model_interference.load_state_dict(checkpoint["model_state"])
     model_interference.to(device)
@@ -1723,6 +1736,8 @@ def singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     all_labels = []
     all_logits = []
     # all_context = []
+
+    model_interference.eval()
 
     with torch.no_grad():
         for inputs, labels in test_loader:
@@ -1796,7 +1811,7 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     print('Test accuracy: ', best["test_accuracy"])
     print('\n')
     
-    model_path = model_path_folder / f'model.pth'
+    model_path = model_path_folder / 'model.pth'
     checkpoint = torch.load(f = model_path, map_location = device)
 
     model_args = checkpoint["model_args"]
@@ -1807,6 +1822,7 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     # model_args["dense_fusion_layer"] = 16
 
     model_interference = FusionNet_CNN_LSTM(**model_args)             # NOTE : **checkpoint["model_args"]
+    
     model_interference.load_state_dict(checkpoint["model_state"])
     model_interference.to(device)
 
@@ -1857,54 +1873,92 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     #===================#
     # Perform inference #
     #===================#
-    for kkk in range(10):
-        correct = 0
-        total = 0
 
-        all_preds = []
-        all_labels = []
-        all_logits = []
-        # all_context = []
+    correct_fusion = 0
+    total = 0
 
-        with torch.no_grad():
-            for eeg, emg, eeg_lab, emg_lab in test_loader:
-                X_eeg, X_emg, y_eeg, y_emg = eeg.to(device), emg.to(device), eeg_lab.to(device), emg_lab.to(device)
+    all_preds = []
+    all_labels = []
+    all_logits = []
+    # all_context = []
 
-                # Forward pass
-                final_logits, _, _, _, _ = model_interference(eeg = X_eeg, emg = X_emg)
-                
-                # Predicted class index
-                _, predicted = torch.max(final_logits, dim=1)             # index of max value (predicted class)
+    model_interference.eval()
 
-                # Accuracy statistics
-                total += y_emg.size(0)
-                correct += (predicted == y_emg).sum().item()
-                
-                # Store outputs for confusion matrix etc.
-                all_preds.append(predicted.cpu())
-                all_labels.append(y_emg.cpu())
-                all_logits.append(final_logits.cpu())
-                # all_context.append(context.cpu())
+    criterion = nn.CrossEntropyLoss()
+    loss_eeg_all = 0
+    loss_emg_all = 0
+    loss_final_all = 0
+    loss_all = 0
+    correct_eeg = 0
+    correct_emg = 0
+    
 
-            all_preds = torch.cat(all_preds).numpy()
-            all_labels = torch.cat(all_labels).numpy()
-            all_logits = torch.cat(all_logits).numpy()
-            # all_context = torch.cat(all_context).numpy()
+    with torch.no_grad():
+        for eeg, emg, eeg_lab, emg_lab in test_loader:
+            X_eeg, X_emg, y_eeg, y_emg = eeg.to(device), emg.to(device), eeg_lab.to(device), emg_lab.to(device)
 
-            #==========#
-            # Analysis #
-            #==========#
+            # Forward pass
+            final_logits, eeg_logits, emg_logits, _, _ = model_interference(eeg = X_eeg, emg = X_emg)
+            
+            # Predicted class index
+            _, fusion_pred = torch.max(final_logits, dim=1)             # index of max value (predicted class)
 
-            # Confusion matrix
-            cm = confusion_matrix(all_labels, all_preds)
-            print(cm)
+            # Compute the loss and its gradients
+            loss_final = criterion(final_logits, y_emg)        # EMG has all 5 lables (contract per finger, release per finger, rest all fingers)
+            loss_eeg   = criterion(eeg_logits, y_eeg)          # EEG has only 3 lables (contract, release, rest)
+            loss_emg   = criterion(emg_logits, y_emg)  
 
-            cm_norm = cm / cm.sum(axis=1, keepdims=True)
-            print(cm_norm)
+            loss = loss_final + 0.3 * loss_eeg + 0.3 * loss_emg     # Only used for training optimization
 
-            accuracy = correct / total
-            print(f"Test accuracy: {accuracy:.4f}")
-    exit()
+            # Accuracy statistics
+            total += y_emg.size(0)
+            correct_fusion += (fusion_pred == y_emg).sum().item()
+            
+            # Store outputs for confusion matrix etc.
+            all_preds.append(fusion_pred.cpu())
+            all_labels.append(y_emg.cpu())
+            all_logits.append(final_logits.cpu())
+            # all_context.append(context.cpu())
+
+            #=====================================#
+            # Inspect contribution of EEG and EMG #
+            #=====================================#
+            eeg_pred = torch.argmax(eeg_logits, dim=1)
+            emg_pred = torch.argmax(emg_logits, dim=1)
+            correct_eeg += (eeg_pred == y_eeg).sum().item()
+            correct_emg += (emg_pred == y_emg).sum().item()
+            loss_final_all += loss_final.item()
+            loss_eeg_all += loss_eeg.item()
+            loss_emg_all += loss_emg.item()
+            loss_all += loss.item()
+
+        all_preds = torch.cat(all_preds).numpy()
+        all_labels = torch.cat(all_labels).numpy()
+        all_logits = torch.cat(all_logits).numpy()
+        # all_context = torch.cat(all_context).numpy()
+
+        num_batches = len(test_loader)
+        print('\n------LOSSES-------\n')
+        print(f"Avg EEG loss   : {loss_eeg_all / num_batches :.4f}")
+        print(f"Avg EMG loss   : {loss_emg_all / num_batches :.4f}")
+        print(f"Avg final loss : {loss_final_all / num_batches :.4f}")
+        print(f"Avg comb loss  : {loss_all / num_batches :.4f}")
+        print('\n-------Accuracies---------\n')
+        print(f'EEG accuracy : {(correct_eeg / total) * 100 :.2f}')
+        print(f'EMG accuracy : {(correct_emg / total) * 100 :.2f}')
+        print(f"Fusion accuracy: {(correct_fusion / total) * 100 :.2f}")
+
+        #==========#
+        # Analysis #
+        #==========#
+
+        # Confusion matrix
+        cm = confusion_matrix(all_labels, all_preds)
+        print(cm)
+
+        cm_norm = cm / cm.sum(axis=1, keepdims=True)
+        print(cm_norm)
+    
     _plot_tsne_context(context = all_logits, labels = y_EMG_test, perplexity = 40, n_iter = 1000, random_state = 42)
     # plot_tsne_context(context = all_context, labels = y_test, perplexity = 40, n_iter = 1000, random_state = 42)
 
@@ -1997,8 +2051,9 @@ def _plot_tsne_context(
         alpha=0.7,
         s=25
     )
-
-    plt.colorbar(scatter, ticks=range(num_classes), label="Class")
+    class_names = ['Index contract', 'Index release', 'Thumb contract', 'Thumb release', 'Rest']
+    cbar = plt.colorbar(scatter, ticks=range(num_classes), label="Class")
+    cbar.ax.set_yticklabels(class_names)
     plt.xlabel("t-SNE 1")
     plt.ylabel("t-SNE 2")
     plt.title(title)
@@ -2181,7 +2236,7 @@ def summary_accuracies():
     "LSTM":{
         "EEG":[59.3, 41.7, 58.3],
         "EMG":[76.5, 81.5, 92.6],
-        "Fusion":[93.6, 80.2, 96.0]
+        "Fusion":[92.3, 80.2, 96.0]
     },
 
     "CNN+LSTM":{
@@ -2203,12 +2258,19 @@ def summary_accuracies():
 
 if __name__ == '__main__':
     # main()
-    fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
-    # singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EMG')
+    # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
+    # singleNet_inspect_model(subject_name = 'subject_8', sherpa_log_folder = 'SingleNet_LSTM_EMG')
 
     # # # inspect_model(subject_name=1)
-    # for subj in ['subject_0', 'subject_1', 'subject_2']:
-    #     inspect_model(subject_name = subj, sherpa_log_folder = 'FusionNet_CNN+LSTM_fewerHyperparameters')
+    for subj in ['subject_0', 'subject_1', 'subject_2']:
+        inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
 
     # summary_accuracies()
     
+
+# SingleNet_CNN+LSTM_EEG True
+# 'SingleNet_CNN+LSTM_EEG' True
+# 'SingleNet_LSTM_EEG' True
+# 'SingleNet_LSTM_EMG_moreHyperparameters' FALSE
+# 'FusionNet_LSTM_fewerHyperparameters' True
+# 'FusionNet_CNN+LSTM_fewerHyperparameters' True
