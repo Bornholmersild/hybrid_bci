@@ -174,6 +174,9 @@ class SingleNet_LSTM_ATTENSION(nn.Module):
 
         return logits, context, attn_weights
 
+#===============================================#
+# Class for traning either on EMG or EEG data #
+#===============================================#
 class SingleNet_LSTM(nn.Module):
     '''
     Single network to perform LSTM on EEG or EMG datasets.\n
@@ -382,6 +385,9 @@ class SingleNet_CNN_LSTM(nn.Module):
 
         return logits, None, None        # None is placeholders
 
+#======================================#
+# Class for traning on EMG or EEG data #
+#===============?======================#
 class FusionNet_LSTM(nn.Module):
     def __init__(self, 
                  eeg_dim : int,
@@ -389,8 +395,7 @@ class FusionNet_LSTM(nn.Module):
                  eeg_output_dim : int, 
                  emg_output_dim : int, 
                  output_dim : int, 
-                 eeg_hidden_dim : int, 
-                 emg_hidden_dim : int,
+                 hidden_dim : int, 
                  lstm_layers : int, 
                  bidirectional : bool, 
                  dropout : float, 
@@ -409,19 +414,19 @@ class FusionNet_LSTM(nn.Module):
         #   nn.Linear(dense_hidden_layers, dense_layers)                          #            
         #   nn.Linear(dense_layers, X_output_dim)                                 #
         #=========================================================================#
-        EEG_dense_hidden_layers = eeg_hidden_dim * 2 if bidirectional else eeg_hidden_dim
+        EEG_dense_hidden_layers = hidden_dim * 2 if bidirectional else hidden_dim
         EEG_dense_layers = max(8, int(EEG_dense_hidden_layers * dense_ratio))           # Consider bidirection
-        EMG_dense_layers = max(8, int(emg_hidden_dim * dense_ratio))                        # Don't consider bidirection
+        EMG_dense_layers = max(8, int(hidden_dim * dense_ratio))                        # Don't consider bidirection
 
         self.eeg_lstm = nn.LSTM(input_size = eeg_dim, 
-                            hidden_size = eeg_hidden_dim,            # Don't consider bidirectional for hidden units. 
+                            hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
                             num_layers = lstm_layers, 
                             batch_first = True,                  # Data input will be (batch, seq_len, channels)
                             dropout = dropout if lstm_layers > 1 else 0,
                             bidirectional = bidirectional)       # Input dim (batch size, sequence length, input_size)
         
         self.emg_lstm = nn.LSTM(input_size = emg_dim, 
-                            hidden_size = emg_hidden_dim,            # Don't consider bidirectional for hidden units. 
+                            hidden_size = hidden_dim,            # Don't consider bidirectional for hidden units. 
                             num_layers = 1, 
                             batch_first = True,                  # Data input will be (batch, seq_len, channels)
                             dropout = dropout if lstm_layers > 1 else 0,
@@ -442,7 +447,7 @@ class FusionNet_LSTM(nn.Module):
         )
 
         self.emg_dense = nn.Sequential(
-            nn.Linear(emg_hidden_dim, EMG_dense_layers),            # 64
+            nn.Linear(hidden_dim, EMG_dense_layers),            # 64
             act(),
             nn.Dropout(dropout),
             nn.Linear(EMG_dense_layers, emg_output_dim)
@@ -679,6 +684,10 @@ class FusionNet_CNN_LSTM(nn.Module):
         fusion_logits = self.fusion_dense(fusion_input)
 
         return fusion_logits, eeg_logits, emg_logits, None, None       # None is placeholders
+
+#=================#
+# Handles dataset #
+#=================#
 
 class SingleManageDataset(torch.utils.data.Dataset):
     def __init__(self, data, labels, data_type):
@@ -940,6 +949,138 @@ class Manage3Split:
 
         return rest, contract, release
 
+#========================#
+# Dynamic model handling #
+#========================#
+class SingleNetHandler:
+    def __init__(self, model_name : str, sensor_name : str):
+        self.model_name = model_name
+        self.sensor_name = sensor_name
+
+    def get_hyperparameters(self):
+        '''
+        Return parameters for a specfic model
+        '''
+
+        common_params = [
+            # General
+            sherpa.Continuous('learning_rate', [1e-5, 1e-3], scale='log'),      # try out 1e-5, 1e-1
+            sherpa.Continuous("weight_decay", [1e-6, 1e-2], scale="log"),       # try out 1e-5, 1e-1
+            sherpa.Continuous('dropout', [0.1, 0.5]),
+            sherpa.Ordinal('batch_size', [16, 32, 64]),
+            sherpa.Ordinal('dense_ratio', [0.25, 0.5, 0.75, 1.0]),
+            sherpa.Choice('activation', ['relu', 'elu']),
+            # LSTM
+            sherpa.Ordinal('num_hidden_units', [32, 64, 128, 256]),
+            sherpa.Choice("bidirectional", [False, True]),
+            sherpa.Choice('lstm_layers', [1, 2, 3]),
+        ]
+
+        if self.model_name == "FusionNet_LSTM":
+            return common_params
+
+        elif self.model_name == "FusionNet_CNN_LSTM":
+            cnn_params = [
+                sherpa.Ordinal('cnn_filters', [16, 32, 64]),
+                sherpa.Ordinal('EEG_kernel_ratio', [0.01, 0.02, 0.03, 0.04, 0.1]),
+                sherpa.Ordinal('EMG_kernel_ratio', [0.03, 0.06, 0.09, 0.12, 0.15]),
+            ]
+            return common_params + cnn_params
+        else:
+            raise ValueError(f'model_name does not correspond to a model class : {self.model_name}')
+    
+class FusionNetHandler:
+    def __init__(self, model_name : str):
+        self.model_name = model_name
+
+    def get_hyperparameters(self):
+        '''
+        Return parameters for a specfic model
+        '''
+
+        common_params = [
+            # General
+            sherpa.Continuous('learning_rate', [1e-5, 1e-3], scale='log'),      # try out 1e-5, 1e-1
+            sherpa.Continuous("weight_decay", [1e-6, 1e-2], scale="log"),       # try out 1e-5, 1e-1
+            sherpa.Continuous('dropout', [0.1, 0.5]),
+            sherpa.Ordinal('batch_size', [16, 32, 64]),
+            sherpa.Ordinal('dense_ratio', [0.25, 0.5, 0.75, 1.0]),
+            sherpa.Choice('activation', ['relu', 'elu']),
+            # LSTM
+            sherpa.Ordinal('num_hidden_units', [32, 64, 128, 256]),
+            sherpa.Choice("bidirectional", [False, True]),
+            sherpa.Choice('lstm_layers', [1, 2, 3]),
+        ]
+
+        if self.model_name == "FusionNet_LSTM":
+            return common_params
+
+        elif self.model_name == "FusionNet_CNN_LSTM":
+            cnn_params = [
+                sherpa.Ordinal('cnn_filters', [16, 32, 64]),
+                sherpa.Ordinal('EEG_kernel_ratio', [0.01, 0.02, 0.03, 0.04, 0.1]),
+                sherpa.Ordinal('EMG_kernel_ratio', [0.03, 0.06, 0.09, 0.12, 0.15]),
+            ]
+            return common_params + cnn_params
+        else:
+            raise ValueError(f'model_name does not correspond to a model class : {self.model_name}')
+        
+    def build_model_config(self, trial : sherpa.Study, EEG_CH : int, EMG_CH : int, EEG_CLASSES : int, EMG_CLASSES : int, TOTAL_CLASSES : int, EEG_samples : int, EMG_samples : int):
+        '''
+        Build a config dict for model input
+        '''
+        config = {
+            "eeg_dim": EEG_CH,
+            "emg_dim": EMG_CH,
+            "eeg_output_dim": EEG_CLASSES,
+            "emg_output_dim": EMG_CLASSES,
+            "output_dim": TOTAL_CLASSES,
+            "hidden_dim": trial.parameters['num_hidden_units'],
+            "lstm_layers": trial.parameters['lstm_layers'],
+            "bidirectional": trial.parameters['bidirectional'],
+            "dropout": trial.parameters['dropout'],
+            "activation": trial.parameters['activation'],
+            "dense_ratio": trial.parameters['dense_ratio'],
+        }
+
+        if self.model_name == "FusionNet_CNN_LSTM":
+            config.update({
+                "cnn_filters": trial.parameters['cnn_filters'],
+                "eeg_kernel_size": self._kernel_from_ratio(
+                    EEG_samples, trial.parameters['EEG_kernel_ratio'], min_kernel=3),
+                "emg_kernel_size": self._kernel_from_ratio(
+                    EMG_samples, trial.parameters['EMG_kernel_ratio'], min_kernel=3),
+            })
+
+        return config
+    
+    def build_training_config(self, trial : sherpa.Study):
+        return {
+            "lr": trial.parameters["learning_rate"],
+            "weight_decay": trial.parameters["weight_decay"],
+            "batch_size": trial.parameters["batch_size"],
+        }
+    
+    def get_model(self, config: dict):
+        if self.model_name == "FusionNet_LSTM":
+            return FusionNet_LSTM(**config)
+
+        elif self.model_name == "FusionNet_CNN_LSTM":
+            return FusionNet_CNN_LSTM(**config)
+    
+    def _kernel_from_ratio(self, seq_len, ratio, min_kernel = 3):
+        kernel_size = max(min_kernel, int(round(seq_len * ratio)))
+
+        # Make odd
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        
+        # Cannot exceed sequence length
+        if kernel_size > seq_len:
+            kernel_size = seq_len if seq_len % 2 == 1 else seq_len - 1
+        
+        return kernel_size
+
 class ExperimentLogger:
 
     def __init__(self, save_path : Path):
@@ -985,37 +1126,9 @@ class ExperimentLogger:
         # Save immediately (safe against crashes)
         torch.save(self.results, self.save_path)
 
-def build_optimizer_unused(model_params, trial_parameters):
-    hp = trial_parameters
-    opt_name = hp["optimizer"]
-    lr = float(hp["learning_rate"])
-    wd = float(hp["weight_decay"])
-
-    if opt_name == "adamw":
-        # AdamW: decoupled weight decay
-        return torch.optim.AdamW(model_params, lr=lr, weight_decay=wd)
-
-    elif opt_name == "sgd_momentum":
-        mom = float(hp["momentum"])
-        nes = bool(hp["nesterov"])
-        # SGD: in PyTorch this is classic L2-style weight decay, which is fine/equivalent for SGD
-        return torch.optim.SGD(model_params, lr=lr, momentum=mom, nesterov=nes, weight_decay=wd)
-
-    raise ValueError(f"Unknown optimizer: {opt_name}")
-
-def kernel_from_ratio(seq_len, ratio, min_kernel = 3):
-    kernel_size = max(min_kernel, int(round(seq_len * ratio)))
-
-    # Make odd
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    
-    # Cannot exceed sequence length
-    if kernel_size > seq_len:
-        kernel_size = seq_len if seq_len % 2 == 1 else seq_len - 1
-    
-    return kernel_size
-
+#==============================#
+# Traning of model Per subject #
+#==============================#
 def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', data_type : str = None):
     # When chancing between EEG and EMG
     # preprocessing instance
@@ -1086,7 +1199,7 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    MAX_NUM_TRIALS = 150             # 75 - 250 (simply to max) 
     DATA_CH = num_channels
     NUM_CLASSES = 5 if data_type == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
@@ -1112,9 +1225,9 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
         sherpa.Choice(name='activation', range=['relu', 'elu']),
 
         # LSTM
-        sherpa.Ordinal(name='num_hidden_units', range=[32, 64]),          # 32, 64, 128, 256          
-        # sherpa.Choice(name="bidirectional", range=[False, True]),                      
-        # sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
+        sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),          # 32, 64, 128, 256          
+        sherpa.Choice(name="bidirectional", range=[False, True]),                      
+        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
 
         # CNN
         # sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
@@ -1147,8 +1260,8 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
 
         # LSTM
         num_hidden_units = trial.parameters['num_hidden_units']
-        lstm_layers = 1 #trial.parameters['lstm_layers']
-        bidirectional = False #trial.parameters['bidirectional']   
+        lstm_layers = trial.parameters['lstm_layers']
+        bidirectional = trial.parameters['bidirectional']   
         
         # CNN
         # cnn_filters = trial.parameters['cnn_filters']
@@ -1279,7 +1392,7 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
         # writer.close()                            # NOTE: Enable with tensorboard
         study.finalize(trial, status = 'COMPLETED')
 
-def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusionNet_LSTM_EMG'):
+def fusionNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'fusionNet_LSTM', model_name : str = 'FusionNet_LSTM'):
     # When chancing between EEG and EMG
     # preprocessing instance
     # Load function
@@ -1303,7 +1416,8 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
     split_ins = Manage3Split(seed = SEED)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
-
+    train_eval_ins = FusionNet_train_eval()
+    model_handler_ins = FusionNetHandler(model_name = model_name)
     #===========#
     # Load data #
     #===========#
@@ -1335,8 +1449,6 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
     #=======================#
     # Multi fusion datasets #
     #=======================#
-    train_eval_ins = FusionNet_train_eval()
-
     print('\nTraining dataset shapes:')
     train_dataset_ins = MultiManageDataset(X_EEG_train, X_EMG_train, y_EEG_train, y_EMG_train)
     print('Validation dataset shapes:')
@@ -1366,26 +1478,7 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
     # SHERPA Hyperparameter Optimazation #
     #====================================#
 
-    parameters = [
-        # General
-        sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
-        sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),  
-        sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
-        sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
-        sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.75, 1.0]),
-        sherpa.Choice(name='activation', range=['relu', 'elu']),
-
-        # LSTM
-        sherpa.Ordinal(name='emg_num_hidden_units', range=[32, 64]),
-        sherpa.Ordinal(name='eeg_num_hidden_units', range=[32, 64, 128, 256]),
-        sherpa.Choice(name="bidirectional", range=[False, True]),                      
-        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
-
-        # CNN
-        # sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
-        # sherpa.Ordinal(name='EEG_kernel_ratio', range=[0.01, 0.02, 0.03, 0.04, 0.1]),   # EEG [3.75, 7.5, 11.25, 15, 37.5] samples
-        # sherpa.Ordinal(name='EMG_kernel_ratio', range=[0.03, 0.06, 0.09, 0.12, 0.15]),   # EEG : 3.6, 7.2, 10.8, 14.4, 18
-    ]
+    parameters = model_handler_ins.get_hyperparameters()
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
     algorithm = sherpa.algorithms.GPyOpt(
@@ -1402,65 +1495,29 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
     )
 
     for trial in study:
-        # General
-        dropout = trial.parameters['dropout']       
-        batch_size = trial.parameters['batch_size']
-        activation = trial.parameters['activation'] 
-        dense_ratio = trial.parameters['dense_ratio']
-        weight_decay = trial.parameters["weight_decay"]
-        lr = trial.parameters["learning_rate"]
-
-        # LSTM
-        emg_num_hidden_units = trial.parameters['emg_num_hidden_units']
-        eeg_num_hidden_units = trial.parameters['eeg_num_hidden_units']
-        lstm_layers = trial.parameters['lstm_layers']
-        bidirectional = trial.parameters['bidirectional']   
-        
-        # CNN
-        # cnn_filters = trial.parameters['cnn_filters']
-        # EEG_kernel_ratio = trial.parameters['EEG_kernel_ratio']
-        # EMG_kernel_ratio = trial.parameters['EMG_kernel_ratio']
-        # EEG_kernel_size = kernel_from_ratio(seq_len = EEG_num_samples, ratio = EEG_kernel_ratio, min_kernel = 3)
-        # EMG_kernel_size = kernel_from_ratio(seq_len = EMG_num_samples, ratio = EMG_kernel_ratio, min_kernel = 3)
-
+        model_config = model_handler_ins.build_model_config(
+            trial,
+            EEG_CH, EMG_CH,
+            EEG_CLASSES, EMG_CLASSES,
+            TOTAL_CLASSES,
+            EEG_num_samples, EMG_num_samples
+        )
+        train_config = model_handler_ins.build_training_config(
+            trial = trial
+        )
         #=======================#
         # Multi fusion datasets #
         #=======================#
-        model = FusionNet_LSTM(eeg_dim = EEG_CH,
-                               emg_dim = EMG_CH,
-                               eeg_output_dim = EEG_CLASSES,
-                               emg_output_dim = EMG_CLASSES,
-                               output_dim = TOTAL_CLASSES,
-                               eeg_hidden_dim = eeg_num_hidden_units,
-                               emg_hidden_dim = emg_num_hidden_units,
-                               lstm_layers = lstm_layers,
-                               bidirectional = bidirectional,
-                               dropout = dropout,
-                               activation = activation, 
-                               dense_ratio = dense_ratio)         # 8 layers -> 16 layers -> 5 classes
-        '''model = FusionNet_CNN_LSTM(eeg_dim = EEG_CH,
-                               emg_dim = EMG_CH,
-                               eeg_output_dim = EEG_CLASSES,
-                               emg_output_dim = EMG_CLASSES,
-                               output_dim = TOTAL_CLASSES,
-                               hidden_dim = num_hidden_units,
-                               lstm_layers = lstm_layers,
-                               bidirectional = bidirectional,
-                               dropout = dropout,
-                               activation = activation, 
-                               dense_ratio = dense_ratio,
-                               cnn_filters = cnn_filters,
-                               eeg_kernel_size = EEG_kernel_size,
-                               emg_kernel_size = EMG_kernel_size)'''         # 8 layers -> 16 layers -> 5 classes
+        model = model_handler_ins.get_model(config = model_config)
         model.to(device)
 
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.AdamW(params = model.parameters(), lr = lr, weight_decay = weight_decay)
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = train_config['lr'], weight_decay = train_config['weight_decay'])
 
         # DataLoaders (update batch_size)
-        train_loader = DataLoader(train_dataset_ins, batch_size = batch_size, shuffle = True, pin_memory = pin_memory, num_workers = 0)
-        val_loader = DataLoader(val_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
-        test_loader = DataLoader(test_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        train_loader = DataLoader(train_dataset_ins, batch_size = train_config['batch_size'], shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(val_dataset_ins, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(test_dataset_ins, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
 
         best_train_loss = None
         best_val_loss = float("inf")
@@ -1545,41 +1602,11 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
 
         if best_val_loss < global_best_vloss :
             global_best_vloss = best_val_loss
-            # LSTM
-            model_arg = {
-                "eeg_dim": EEG_CH,
-                "emg_dim": EMG_CH,
-                "eeg_output_dim" : EEG_CLASSES,
-                "emg_output_dim" : EMG_CLASSES,
-                "output_dim" : TOTAL_CLASSES,
-                "eeg_hidden_dim": eeg_num_hidden_units,
-                "emg_hidden_dim": emg_num_hidden_units,
-                "lstm_layers": lstm_layers,
-                "bidirectional" : bidirectional,
-                "dropout": dropout,
-                "activation": activation,
-                "dense_ratio": dense_ratio}
-            # CNN
-            '''model_arg = {
-                "eeg_dim": EEG_CH,
-                "emg_dim": EMG_CH,
-                "eeg_output_dim" : EEG_CLASSES,
-                "emg_output_dim" : EMG_CLASSES,
-                "output_dim" : TOTAL_CLASSES,
-                "hidden_dim": num_hidden_units,
-                "lstm_layers": lstm_layers,
-                "bidirectional" : bidirectional,
-                "dropout": dropout,
-                "activation": activation,
-                "dense_ratio": dense_ratio,
-                "cnn_filters" : cnn_filters,
-                "eeg_kernel_size" : EEG_kernel_size,
-                "emg_kernel_size" : EMG_kernel_size}'''
-        
             
             torch.save({
+                "model_name": model_name,
                 "model_state": best_state_dict,
-                "model_args": model_arg, 
+                "model_args": model_config, 
                 "optimizer_state_dict": best_optimizer_dict,
                 "hyperparameters": trial.parameters,}, 
                 r'{}\model.pth'.format(log_dir))
@@ -1587,6 +1614,607 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder = 'fusi
         # writer.close()
         study.finalize(trial, status = 'COMPLETED')
 
+#==================================#
+# Traning of model across subjects #
+#==================================#
+def singleNet_classfication_acrossSubjects(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', data_type : str = None):
+    # When chancing between EEG and EMG
+    # preprocessing instance
+    # Load function
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
+
+    LOG_NAME = 'subject_0-2'
+    log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+    data_type = str.upper(data_type)
+    #==========================#
+    # NOTE: Tensorboard config #
+    #==========================#
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')                                        # Use when having tensorboard
+    os.makedirs(log_dir, exist_ok=False)                                                          # use without tensorboard
+
+    logger_ins = ExperimentLogger(save_path = log_dir)
+    load_ins = load_datasets(base_dir = data_dir)
+    split_ins = Manage3Split(seed = SEED)
+    train_eval_ins = SingleNet_train_eval()
+
+    if data_type == 'EMG':
+        EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    elif data_type == 'EEG':
+        EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    else:
+        raise ValueError('data_type must be either EMG or EEG')
+
+    #====================#
+    # Load Training data #
+    #====================#
+    X_train_index = []
+    X_train_thumb = []
+
+    for subj in subject_name:
+        if data_type == 'EMG':
+            X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subj, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+            X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subj, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+        else:
+            X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+            X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+
+        if subj == 'subject_2':
+            X_test_index = X_epoch_index
+            X_test_thumb = X_epoch_thumb
+        else:
+            X_train_index.append(X_epoch_index)
+            X_train_thumb.append(X_epoch_thumb)
+    
+    X_train_index = np.concatenate(X_train_index, axis = 0)
+    X_train_thumb = np.concatenate(X_train_thumb, axis = 0)
+
+    FREQ = RMS_FREQ if data_type == 'EMG' else EEG_FREQ
+
+    # Slice X_test_... into validation/test split
+    X_test_num_epochs = X_test_index.shape[0]
+    X_val_slice_index = X_test_index[:X_test_num_epochs//2]          # For validation
+    X_test_slice_index = X_test_index[X_test_num_epochs//2:]          # For testing
+
+    X_test_num_epochs = X_test_thumb.shape[0]
+    X_val_slice_thumb = X_test_thumb[:X_test_num_epochs//2]          # For validation
+    X_test_slice_thumb = X_test_thumb[X_test_num_epochs//2:]          # For testing
+
+    X_train, y_train = split_ins._build_split(epoch_index = X_train_index,
+                                              epoch_thumb = X_train_thumb,
+                                              index_trials_indices = slice(None),
+                                              thumb_trials_indices = slice(None),
+                                              fs = FREQ)
+
+    X_val, y_val = split_ins._build_split(epoch_index = X_val_slice_index,
+                                          epoch_thumb = X_val_slice_thumb,
+                                          index_trials_indices = slice(None),
+                                          thumb_trials_indices = slice(None),
+                                          fs = FREQ)
+    
+    X_test, y_test = split_ins._build_split(epoch_index = X_test_slice_index,
+                                            epoch_thumb = X_test_slice_thumb,
+                                            index_trials_indices = slice(None),
+                                            thumb_trials_indices = slice(None),
+                                            fs = FREQ)
+        
+    _, num_samples, num_channels = X_train.shape
+
+    #=================#
+    # Single datasets #
+    #=================#
+    print('\nTraining dataset shapes:')
+    train_dataset_ins = SingleManageDataset(X_train, y_train, data_type = data_type)
+    print('Validation dataset shapes:')
+    val_dataset_ins = SingleManageDataset(X_val, y_val, data_type = data_type)
+    print('Testing dataset shapes:')
+    test_dataset_ins = SingleManageDataset(X_test, y_test, data_type = data_type)
+
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    DATA_CH = num_channels
+    NUM_CLASSES = 5 if data_type == 'EMG' else 3
+    NUM_EPOCHS = 250                 # 150 - 200
+    PATIENCE = 25                   # Early stopping patience - 25
+    NUM_INITIAL_DATA_POINTS = 20
+    
+    #===========#
+    # Constants #
+    #===========#
+    global_best_vloss = float("inf")                # Used to only save one model.
+
+    #====================================#
+    # SHERPA Hyperparameter Optimazation #
+    #====================================#
+
+    parameters = [
+        # General
+        sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
+        sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),  
+        sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
+        sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
+        sherpa.Ordinal(name='dense_ratio', range=[0.25, 0.5, 0.75, 1.0]),
+        sherpa.Choice(name='activation', range=['relu', 'elu']),
+
+        # LSTM
+        sherpa.Ordinal(name='num_hidden_units', range=[32, 64]),          # 32, 64, 128, 256          
+        sherpa.Choice(name="bidirectional", range=[False, True]),                      
+        sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
+
+        # CNN
+        # sherpa.Ordinal(name='cnn_filters', range=[16, 32, 64]),
+        # sherpa.Ordinal(name='EEG_kernel_ratio', range=[0.01, 0.02, 0.03, 0.04, 0.1]),   # EEG [3.75, 7.5, 11.25, 15, 37.5] samples
+        # sherpa.Ordinal(name='EMG_kernel_ratio', range=[0.03, 0.06, 0.09, 0.12, 0.15]),   # EEG : 3.6, 7.2, 10.8, 14.4, 18
+    ]
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
+    )
+    # Study represents the hyperparameter optimization itself
+    study = sherpa.Study(
+        parameters = parameters,
+        algorithm = algorithm,
+        lower_is_better = True,
+        disable_dashboard = True
+    )
+
+    for trial in study:
+        # General
+        dropout = trial.parameters['dropout']       
+        batch_size = trial.parameters['batch_size']
+        activation = trial.parameters['activation'] 
+        dense_ratio = trial.parameters['dense_ratio']
+        weight_decay = trial.parameters["weight_decay"]
+        lr = trial.parameters["learning_rate"]
+
+        # LSTM
+        num_hidden_units = trial.parameters['num_hidden_units']
+        lstm_layers = trial.parameters['lstm_layers']
+        bidirectional = trial.parameters['bidirectional']   
+        
+        # CNN
+        # cnn_filters = trial.parameters['cnn_filters']
+        # kernel_ratio = trial.parameters['EMG_kernel_ratio']
+        # kernel_size = kernel_from_ratio(seq_len = num_samples, ratio = kernel_ratio, min_kernel = 3)
+
+        #=================#
+        # Single datasets #
+        #=================#
+        model = SingleNet_LSTM(input_dim = DATA_CH, output_dim = NUM_CLASSES, hidden_dim = num_hidden_units, lstm_layers = lstm_layers, bidirectional = bidirectional, dropout = dropout, activation = activation, dense_ratio = dense_ratio)
+        # model = SingleNet_CNN_LSTM(input_dim = DATA_CH,
+        #                            output_dim = NUM_CLASSES,
+        #                            hidden_dim = num_hidden_units,
+        #                            lstm_layers = lstm_layers,
+        #                            bidirectional = bidirectional,
+        #                            dropout = dropout,
+        #                            activation = activation,
+        #                            dense_ratio = dense_ratio,
+        #                            cnn_filters = cnn_filters,
+        #                            kernel_size = kernel_size)
+        model.to(device)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = lr, weight_decay = weight_decay)
+
+        # DataLoaders (update batch_size)
+        train_loader = DataLoader(train_dataset_ins, batch_size = batch_size, shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(val_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(test_dataset_ins, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+
+        best_train_loss = None
+        best_val_loss = float("inf")
+        best_val_acc = None
+
+        best_epoch = 0
+        best_state_dict = None
+        early_stopping_counter = 0
+
+        #===================================#
+        # NOTE: Tensorboard config          #
+        #   Enable all if using tensorboard #
+        #===================================#
+        # log_folder = os.path.join(log_dir, f"trial_{trial.id}")               
+        # os.makedirs(log_folder, exist_ok=False)
+        # writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
+
+        for epoch in range(NUM_EPOCHS):
+
+            # Train model
+            avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
+
+            # Validate model
+            avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+
+            # Tensor Board logging
+            # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
+            # writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
+            # writer.flush()
+
+            study.add_observation(trial = trial,
+                                iteration = epoch,
+                                objective = avg_vloss)
+
+            # Track best performance, and save the model's state
+            if avg_vloss < best_val_loss:
+                best_val_loss = avg_vloss
+                best_epoch = epoch
+
+                best_state_dict = deepcopy(model.state_dict())
+                best_optimizer_dict = deepcopy(optimizer.state_dict())
+ 
+                best_train_loss = avg_train_loss
+                best_val_acc = vacc
+
+                early_stopping_counter = 0
+
+            else:
+                early_stopping_counter += 1
+
+                if early_stopping_counter >= PATIENCE:
+                    break
+
+            print(
+                f'{subject_name} | '
+                f'Trial {trial.id}/{MAX_NUM_TRIALS} | '
+                f'Epoch {epoch+1}/{NUM_EPOCHS} | '
+                f'Train {avg_train_loss:.4f} | '
+                f'Val {avg_vloss:.4f} | '
+                f'Acc {vacc:.2f} |',
+                f'Early stopping {early_stopping_counter} |',
+                end='\r',
+                flush=True
+            )
+
+        model.load_state_dict(best_state_dict)
+
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
+        
+        logger_ins.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = best_epoch,
+            train_loss = best_train_loss,
+            val_loss = best_val_loss,
+            val_acc = best_val_acc,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+
+        if best_val_loss < global_best_vloss :
+            global_best_vloss = best_val_loss
+
+          
+            model_arg = {
+            "input_dim": DATA_CH,
+            "output_dim" : NUM_CLASSES,
+            "hidden_dim": num_hidden_units,
+            "lstm_layers": lstm_layers,
+            "bidirectional" : bidirectional,
+            "dropout": dropout,
+            "activation": activation,
+            "dense_ratio": dense_ratio,}
+            # "cnn_filters" : cnn_filters,
+            # "kernel_size" : kernel_size,
+            
+            torch.save({
+                "model_state": best_state_dict,
+                "model_args": model_arg, 
+                "optimizer_state_dict": best_optimizer_dict,
+                "hyperparameters": trial.parameters,}, 
+                r'{}\model.pth'.format(log_dir))
+            
+        # writer.close()                            # NOTE: Enable with tensorboard
+        study.finalize(trial, status = 'COMPLETED')
+
+def fusionNet_classfication_acrossSubjects(subject_name : list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', model_name : str = 'FusionNet_LSTM'):
+    '''
+    Train a model with EEG and EMG across subjects. 
+    Subjects are clearly separated between traning, validation and test split
+    
+    Parameters
+    -----------
+    subject_name : list
+        List of all subjects to be included
+    sherpa_log_folder : str
+        Path to where the model and loggings need to be saved in the 'src/experiment/data' directory
+    model_name : str
+        Select between models.\n
+        Options:
+        1) FusionNet_LSTM
+        2) FusionNet_CNN_LSTM
+        3) FusionNet_CNN_LSTM_ATTENSION
+    '''
+    # When chancing between EEG and EMG
+    # preprocessing instance
+    # Load function
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
+
+    LOG_NAME = 'subject_0-2_test'
+    log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+
+    #==========================#
+    # NOTE: Tensorboard config #
+    #==========================#
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')                                        # Use when having tensorboard
+    os.makedirs(log_dir, exist_ok=False)                                                          # use without tensorboard
+
+    logger_ins = ExperimentLogger(save_path = log_dir)
+    load_ins = load_datasets(base_dir = data_dir)
+    split_ins = Manage3Split(seed = SEED)
+    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    train_eval_ins = FusionNet_train_eval()
+    model_handler_ins = FusionNetHandler(model_name = model_name)
+    #====================#
+    # Load Training data #
+    #====================#
+    EEG_train_index = []
+    EEG_train_thumb = []
+    EMG_train_index = []
+    EMG_train_thumb = []
+
+    for subj in subject_name:
+        EEG_epoch_index, EMG_epoch_index, _, _ = load_ins.load_EEG_EMG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, EEG_preprocessing_func = EEG_ins.preprocessing_routine, EMG_preprocessing_func = EMG_ins.preprocessing_routine, EMG_config_dict = EMG_CONFIG_DICT, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+        EEG_epoch_thumb, EMG_epoch_thumb, _, _ = load_ins.load_EEG_EMG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, EEG_preprocessing_func = EEG_ins.preprocessing_routine, EMG_preprocessing_func = EMG_ins.preprocessing_routine, EMG_config_dict = EMG_CONFIG_DICT, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+       
+        if subj == 'subject_2':
+            EEG_test_index, EMG_test_index = EEG_epoch_index, EMG_epoch_index
+            EEG_test_thumb, EMG_test_thumb = EEG_epoch_thumb, EMG_epoch_thumb
+        else:
+            EEG_train_index.append(EEG_epoch_index)
+            EEG_train_thumb.append(EEG_epoch_thumb)
+            EMG_train_index.append(EMG_epoch_index)
+            EMG_train_thumb.append(EMG_epoch_thumb)
+    
+    # Across multiple subjects
+    EEG_train_index = np.concatenate(EEG_train_index, axis = 0)
+    EEG_train_thumb = np.concatenate(EEG_train_thumb, axis = 0)
+    EMG_train_index = np.concatenate(EMG_train_index, axis = 0)
+    EMG_train_thumb = np.concatenate(EMG_train_thumb, axis = 0)
+
+    # Slice X_test_... into validation/test split
+    def _validation_test_split(data):
+        num_epochs = data.shape[0]
+        halfway = num_epochs // 2
+
+        val_split = data[:halfway]
+        test_split = data[halfway:]
+
+        return val_split, test_split
+    
+    def _build_split(train_index, train_thumb, val_index, val_thumb, test_index, test_thumb, fs):
+
+        X_train, y_train = split_ins._build_split(epoch_index = train_index,
+                                                epoch_thumb = train_thumb,
+                                                index_trials_indices = slice(None),
+                                                thumb_trials_indices = slice(None),
+                                                fs = fs)
+
+        X_val, y_val = split_ins._build_split(epoch_index = val_index,
+                                            epoch_thumb = val_thumb,
+                                            index_trials_indices = slice(None),
+                                            thumb_trials_indices = slice(None),
+                                            fs = fs)
+        
+        X_test, y_test = split_ins._build_split(epoch_index = test_index,
+                                                epoch_thumb = test_thumb,
+                                                index_trials_indices = slice(None),
+                                                thumb_trials_indices = slice(None),
+                                                fs = fs)
+
+        return X_train, X_val, X_test, y_train, y_val, y_test
+    
+    # Split EEG dataset into 50% validation and 50% test datasets
+    EEG_val_index_split, EEG_test_index_split = _validation_test_split(data = EEG_test_index)
+    EEG_val_thumb_split, EEG_test_thumb_split = _validation_test_split(data = EEG_test_thumb)
+    # Split EMG dataset into 50% validation and 50% test datasets
+    EMG_val_index_split, EMG_test_index_split = _validation_test_split(data = EMG_test_index)
+    EMG_val_thumb_split, EMG_test_thumb_split = _validation_test_split(data = EMG_test_thumb)
+
+    X_EEG_train, X_EEG_val, X_EEG_test, y_EEG_train, y_EEG_val, y_EEG_test = _build_split(train_index = EEG_train_index,
+                                                                              train_thumb = EEG_train_thumb,
+                                                                              val_index = EEG_val_index_split,
+                                                                              val_thumb = EEG_val_thumb_split,
+                                                                              test_index = EEG_test_index_split,
+                                                                              test_thumb = EEG_test_thumb_split,
+                                                                              fs = EEG_FREQ)
+    
+    X_EMG_train, X_EMG_val, X_EMG_test, y_EMG_train, y_EMG_val, y_EMG_test = _build_split(train_index = EMG_train_index,
+                                                                              train_thumb = EMG_train_thumb,
+                                                                              val_index = EMG_val_index_split,
+                                                                              val_thumb = EMG_val_thumb_split,
+                                                                              test_index = EMG_test_index_split,
+                                                                              test_thumb = EMG_test_thumb_split,
+                                                                              fs = RMS_FREQ)
+    
+    _, EEG_num_samples, EEG_num_channels = X_EEG_train.shape
+    _, EMG_num_samples, EMG_num_channels = X_EMG_train.shape
+
+    #=======================#
+    # Multi fusion datasets #
+    #=======================#
+    print('\nTraining dataset shapes:')
+    train_dataset_ins = MultiManageDataset(X_EEG_train, X_EMG_train, y_EEG_train, y_EMG_train)
+    print('Validation dataset shapes:')
+    val_dataset_ins = MultiManageDataset(X_EEG_val, X_EMG_val, y_EEG_val, y_EMG_val)
+    print('Testing dataset shapes:')
+    test_dataset_ins = MultiManageDataset(X_EEG_test, X_EMG_test, y_EEG_test, y_EMG_test)
+
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 20
+    EEG_CH = EEG_num_channels
+    EMG_CH = EMG_num_channels
+    EEG_CLASSES = 3
+    EMG_CLASSES = 5
+    TOTAL_CLASSES = EMG_CLASSES
+    NUM_EPOCHS = 250                 # 150 - 200
+    PATIENCE = 25                   # Early stopping patience - 25
+    
+    #===========#
+    # Constants #
+    #===========#
+    global_best_vloss = float("inf")                # Used to only save one model.
+
+    #====================================#
+    # SHERPA Hyperparameter Optimazation #
+    #====================================#
+
+    parameters = model_handler_ins.get_hyperparameters()
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
+    )
+    # Study represents the hyperparameter optimization itself
+    study = sherpa.Study(
+        parameters = parameters,
+        algorithm = algorithm,
+        lower_is_better = True,
+        disable_dashboard = True
+    )
+
+    for trial in study:
+        model_config = model_handler_ins.build_model_config(
+            trial,
+            EEG_CH, EMG_CH,
+            EEG_CLASSES, EMG_CLASSES,
+            TOTAL_CLASSES,
+            EEG_num_samples, EMG_num_samples
+        )
+        train_config = model_handler_ins.build_training_config(
+            trial = trial
+        )
+        print(model_config)
+        print(train_config)
+        #=======================#
+        # Multi fusion datasets #
+        #=======================#
+        model = model_handler_ins.get_model(config = model_config)
+        model.to(device)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = train_config['lr'], weight_decay = train_config['weight_decay'])
+
+        # DataLoaders (update batch_size)
+        train_loader = DataLoader(train_dataset_ins, batch_size = train_config['batch_size'], shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(val_dataset_ins, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(test_dataset_ins, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        exit()
+        best_train_loss = None
+        best_val_loss = float("inf")
+        best_val_acc = None
+
+        best_epoch = 0
+        best_state_dict = None
+        early_stopping_counter = 0
+
+        #===================================#
+        # NOTE: Tensorboard config          #
+        #   Enable all if using tensorboard #
+        #===================================#
+        # log_folder = os.path.join(log_dir, f"trial_{trial.id}")               
+        # os.makedirs(log_folder, exist_ok=False)
+        # writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
+
+        for epoch in range(NUM_EPOCHS):
+
+            # Train model
+            avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
+
+            # Validate model
+            avg_vloss, vacc, _ = train_eval_ins.validation_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+
+            # Tensor Board logging
+            # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
+            # writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
+            # writer.flush()
+
+            study.add_observation(trial = trial,
+                                iteration = epoch,
+                                objective = avg_vloss)
+
+            # Track best performance, and save the model's state
+            if avg_vloss < best_val_loss:
+                best_val_loss = avg_vloss
+                best_epoch = epoch
+
+                best_state_dict = deepcopy(model.state_dict())
+                best_optimizer_dict = deepcopy(optimizer.state_dict())
+ 
+                best_train_loss = avg_train_loss
+                best_val_acc = vacc
+
+                early_stopping_counter = 0
+
+            else:
+                early_stopping_counter += 1
+
+                if early_stopping_counter >= PATIENCE:
+                    break
+
+            print(
+                f'{subject_name} | '
+                f'Trial {trial.id}/{MAX_NUM_TRIALS} | '
+                f'Epoch {epoch+1}/{NUM_EPOCHS} | '
+                f'Train {avg_train_loss:.4f} | '
+                f'Val {avg_vloss:.4f} | '
+                f'Acc {vacc:.2f} |',
+                f'Early stopping {early_stopping_counter} |',
+                end='\r',
+                flush=True
+            )
+
+        model.load_state_dict(best_state_dict)
+
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
+        
+        logger_ins.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = best_epoch,
+            train_loss = best_train_loss,
+            val_loss = best_val_loss,
+            val_acc = best_val_acc,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+
+        if best_val_loss < global_best_vloss :
+            global_best_vloss = best_val_loss
+
+            torch.save({
+                "model_name": model_name,
+                "model_state": best_state_dict,
+                "model_args": model_config, 
+                "optimizer_state_dict": best_optimizer_dict,
+                "hyperparameters": trial.parameters,}, 
+                r'{}\model.pth'.format(log_dir))
+            
+        # writer.close()                            # NOTE: Enable with tensorboard
+        study.finalize(trial, status = 'COMPLETED')
+
+#================#
+# Analyse models #
+#================#
 def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
     # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
 
@@ -1619,7 +2247,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         if rank > 10:
             break'''
     
-    '''print('Last ten')
+    print('Last ten')
     data_len = len(data['trials'])
     for idx in range(data_len - 50, data_len):
         trial = data['trials'][idx]
@@ -1631,7 +2259,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('Validation loss:', trial['validation_loss'])
         print('Validation accuracy:', trial['validation_accuracy'])
         print('Test accuracy:', trial['test_accuracy'])
-        print('Hyperparameters:\n', trial['hyperparameters'], '\n')'''
+        print('Hyperparameters:\n', trial['hyperparameters'], '\n')
 
     best_vloss = min(
         data["trials"],
@@ -1651,7 +2279,8 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('         Training loss:' , best_value['training_loss'])
         print('         validation loss', best_value['validation_loss'])
         print('         Test accuracy: ', best_value["test_accuracy"])
-        # print(cm)
+        print('         Hyperparameter: ', best_value['hyperparameters'])
+        print(cm)
         print('\n')
 
 def singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
@@ -2234,24 +2863,32 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
 def main():
     t0 = time.time()
-    subjects = ['subject_0']
+    subjects = ['subject_0', 'subject_1', 'subject_2']
 
-    for subject in subjects:
-        fusionNet_classfication(subject_name = subject, sherpa_log_folder = 'FusionNet_LSTM_FH')
-        # singleNet_classfication(subject_name = subject, sherpa_log_folder = 'SingleNet_LSTM_EMG_FH', data_type = 'EMG')
-
+    # fusionNet_classfication(subject_name = subject, sherpa_log_folder = 'FusionNet_LSTM_fewerHyperparameters')
+    # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = 'FusionNet_LSTM_fewerHyperparameters', model_name = 'FusionNet_CNN_LSTM')
+    singleNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = 'SingleNet_LSTM_EEG', data_type='EEG')
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
 
 def summary_accuracies():
     subjects = ['S0','S1','S2']
 
+    # Subjejcts 0-1 traning and subject 2 for test and validaiton
+    #LSTM_fusion : 52.2 acc, 1.97 loss
+    #LSTM_EMG : 56.86, 1.28 loss
+    #LSTM_EEG : 50.93 acc, 0.84 loss
+
+    #CNN+LSTM_fusion : 85.54 acc, 1.2 loss
+    #CNN+LSTM_EMG : 88.62, 0.54 loss
+    #CNN+LSTM_EEG : 47.9, 0.92 loss
+
     accuracies = {
 
     "LSTM":{
         "EEG":[59.3, 41.7, 58.3],
-        "EMG":[92.6, 82.7, 96.3],           # subj3 : 83.3 , subj4 : 93.6, subj5 : 97.5
-        "Fusion":[92.3, 80.2, 96.0]
+        "EMG":[92.6, 82.7, 96.3],           # subj3 : 83.3 , subj4 : 93.6 , subj5 : 97.5
+        "Fusion":[92.3, 80.2, 96.0]         # subj3 : 91.7 , subj4 : 79.5 , subj5 : 85.2 , subj6 : 59.7]
     },
 
     "CNN+LSTM":{
@@ -2275,10 +2912,10 @@ if __name__ == '__main__':
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_CNN+LSTM_EMG')
 
-    # inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
+    inspect_model(subject_name = 'subject_0-2', sherpa_log_folder = 'SingleNet_LSTM_EEG')
 
-    for subj in ['subject_0', 'subject_1', 'subject_2']:
-        inspect_model(subject_name = subj, sherpa_log_folder = 'SingleNet_LSTM_EMG')
+    # for subj in ['subject_3', 'subject_4', 'subject_5', 'subject_6']:
+    #     inspect_model(subject_name = subj, sherpa_log_folder = 'FusionNet_LSTM_fewerHyperparameters')
 
     # summary_accuracies()
     
