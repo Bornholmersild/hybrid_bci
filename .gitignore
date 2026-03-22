@@ -17,7 +17,10 @@ Thumbs.db
 edited_images/
 
 # Tensorboard logging files
-src/models/loggings/BCI_IV_2a
-src/models/loggings/SingleNet_CNN+LSTM_EEG
-src/models/loggings/SingleNet_CNN+LSTM_EMG
+src/models/sherpa_loggigns/
+src/models/loggings/BCI_IV_2a/
+src/models/loggings/SingleNet_CNN+LSTM_EEG/
+src/models/loggings/SingleNet_CNN+LSTM_EMG/
+src/models/loggings/SingleNet_LSTM_EMG_RandomSearch/
+
 

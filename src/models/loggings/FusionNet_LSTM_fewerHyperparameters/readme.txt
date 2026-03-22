@@ -1,3 +1,4 @@
+#============================ FOR SUBJECT 0 - 2 ========================================#
     MAX_NUM_TRIALS = 150             # 75 - 250 (simply to max) 
     EEG_CH = EEG_num_channels
     EMG_CH = EMG_num_channels
@@ -19,3 +20,4 @@
         sherpa.Ordinal(name='num_hidden_units', range=[32, 64, 128, 256]),
         sherpa.Choice(name="bidirectional", range=[False, True]),                      
         sherpa.Choice(name='lstm_layers', range=[1, 2, 3]),
+#========================================================================================#
