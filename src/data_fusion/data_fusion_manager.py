@@ -29,9 +29,9 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "subject_15"                 # Name of the subject : subject 0, subject 1
+SUBJECT_NAME = "subject_16"                 # Name of the subject : subject 0, subject 1
 FINGER_NAME = 'flex_thumb_finger'                       # Name of the data file      - flex_baseline_finger -> 6 epochs
-NUM_EPOCHS = 30                                         # Number of epochs per experiment
+NUM_EPOCHS = 30                                        # Number of epochs per experiment
 REST_DURATION = 3                                       # Rest duration (sec) during 1 trial
 ONSET_DURATION = 3                                      # ONSET duration (sec) during 1 trial
 REL_DURATION = 3                                        # Release duration (sec) during 1 trial
@@ -57,7 +57,7 @@ MODES = {
     execute_protocol : Change experiment protocol
     file_path : Can add description infront of 'current_time'. Like filepath_MC = folders["MC"] / f"Example_{current_time}.csv"
 * Remember to check when processes start and it might need to be shifted
-'''
+''' 
 
 def MC_start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_init, stream_on_event):
     #mc_ins = MC.Ada_con(co_mod = 0, re_only = False, devicename = MC_PORT)  # linux: '/dev/ttyUSB0', windows: 'COM3'

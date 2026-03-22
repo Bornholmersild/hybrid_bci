@@ -681,6 +681,36 @@ class EEG_preprocessing(Filtering):
 
         return signal[:, keep_idx], keep_idx
 
+    def sliding_rms(self, signal, window_size=10, step_size=5):
+        """
+        Parameters
+        ----------
+        signal : np.ndarray
+            Shape (epochs, sequence, channels)
+
+        Returns
+        -------
+        rms : np.ndarray
+            Shape (epochs, windows, channels)
+        """
+
+        E, T, C = signal.shape
+
+        # Number of windows
+        n_windows = (T - window_size) // step_size + 1
+
+        rms = np.zeros((E, n_windows, C))
+
+        for epo in range(E):
+            for ch in range(C):
+                w_idx = 0
+                for start in range(0, T - window_size + 1, step_size):
+                    window = signal[epo, start:start + window_size, ch]
+                    rms[epo, w_idx, ch] = np.sqrt(np.mean(window**2))
+                    w_idx += 1
+
+        return rms
+    
 class EMG_preprocessing(Filtering):
     def __init__(self,
                  fs = 2000,

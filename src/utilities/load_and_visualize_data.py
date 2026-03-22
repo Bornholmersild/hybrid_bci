@@ -16,6 +16,19 @@ from scipy.signal import welch
 from src.utilities.preprocessing import Filtering, EEG_preprocessing, EMG_preprocessing, RejectBadEpochs
 # from src.utilities.EEG_feature_extraction import FeatureExtraction
 
+from typing import Dict, List
+
+EEG_channel_names = [
+    "Fp1", "Fp2",   # frontal pole
+    "C3",  "C4",    # central
+    "T5",  "T6",    # temporal (posterior)
+    "Cz",  "Fz",    # occipital
+    "F7",  "F8",    # temporal (anterior)
+    "F3",  "F4",    # frontal
+    "T3",  "T4",    # temporal (mid)
+    "P3",  "P4"     # parietal
+    ]
+
 class load_datasets():
     '''
     Class to find data files and load EMG and EEG data
@@ -571,6 +584,70 @@ class visualize_EEG(plot_toolbox):
             manager = plt.get_current_fig_manager()
             manager.window.state('zoomed')  # Best option in VS Code
             plt.show()
+    
+    def plot_mrcp(self, mrcp_index : np.ndarray, mrcp_thumb : np.ndarray, useable_channels : list, fs : int = None):
+        '''
+        Plot sequential EEG data with RMS envelope OR
+        plot mean epoch EEG data
+
+        :param numpy.nDarray egg: EGG data of shape (samples, channels)
+        :param pd.DataFrame markers: Provide markers file to display marker or provide a int for disable markers insert
+        :param list display_window: Provide a list of two ints [start, end] in secounds to display period of the sequential data and leave as int to display all
+        '''
+        fs = self.fs if fs is None else fs
+        # ---- data info ----
+        n_samples, n_ch = mrcp_index.shape
+
+        time = np.arange(n_samples) / fs
+        ymax = np.max( (np.max(mrcp_index), np.max(mrcp_thumb)) )
+        ymin = np.min( (np.min(mrcp_index), np.min(mrcp_thumb)) )
+
+
+        fig, axs = plt.subplots(
+            n_ch, 1,
+            figsize=(10, 6),
+            sharex=True,
+            dpi=150
+        )
+
+        # ---- plot each channel ----
+        for i in range(n_ch):
+            ax = axs[i]
+
+            Xi = mrcp_index[:, i]
+            Xt = mrcp_thumb[:, i]
+                                    
+            ax.plot(time, Xi, linewidth=0.9, label = 'Index at ' + self.eeg_ch_names[useable_channels[i]], color = 'steelblue')
+            ax.plot(time, Xt, linewidth=0.9, label = 'Thumb at ' + self.eeg_ch_names[useable_channels[i]], color = 'orange')
+
+            ax.set_ylim([ymin, ymax])
+            ax.set_xlim([0, time[-1]])
+            ax.set_xticks(np.arange(0, time[-1]+0.1, 1))
+
+            ax.set_ylabel("Relative amplitude (%)")
+            axs[-1].set_xlabel("Time (s)")
+
+            ax.legend(loc = 'upper right')
+            ax.grid(alpha=0.3)    
+
+            # vertical line
+            ax.axhline(y = 0, color='black', linestyle='-', alpha=0.5)
+            ax.axvline(x = 3, color='salmon', linestyle='--', alpha=0.5)
+            ax.axvline(x = 6, color='salmon', linestyle='--', alpha=0.5)
+
+            # label text above line
+            ax.text(
+                3, ax.set_ylim()[1]*0.9, 'Onset',
+                rotation=90, color='salmon', ha='left', va='top', fontsize=10
+            )
+            ax.text(
+                6, ax.set_ylim()[1]*0.9, 'Release',
+                rotation=90, color='salmon', ha='left', va='top', fontsize=10
+            )
+
+        fig.suptitle('Frequency Range 13 - 30 Hz', fontsize=12)
+        fig.tight_layout()
+        plt.show()
 
 class visualize_EMG():
     def __init__(self, fs = 2000, rms_sampling_window = 200, rms_windows_stepsize = 50,  total_epochs = 90, trial_period = 9):
@@ -764,6 +841,64 @@ def compute_mrcp(epochs, baseline_start = 0.5, baseline_end = 2.5, fs = 125):
 
     return mrcp
 
+def compute_erd_ers(eeg_epoch, fs, baseline_start, baseline_end):
+    """
+    Compute ERD/ERS for EEG data.
+
+    Parameters
+    ----------
+    eeg_epoch : np.ndarray
+        Shape (epochs, sequence, channels)
+    fs : int
+        Sampling frequency
+    band : tuple
+        Frequency band (low, high), e.g. (8,13) for mu
+    onset_time : float
+        Movement onset in seconds (e.g. 3.0)
+    baseline_window : tuple
+        Relative to onset (e.g. (-1, 0))
+
+    Returns
+    -------
+    erd_ers : np.ndarray
+        Shape (epochs, sequence, channels)
+    """
+    from scipy.ndimage import uniform_filter1d
+    epochs, T, C = eeg_epoch.shape
+
+    # =========================
+    # 1. Power (squared signal)
+    # =========================
+    power = eeg_epoch ** 2
+
+    # Optional smoothing
+    power = uniform_filter1d(power, size=int(0.25 * fs), axis=1)
+
+    # =========================
+    # 2. Convert time → indices
+    # =========================
+    baseline_start = int(baseline_start * fs)
+    baseline_end   = int(baseline_end * fs)
+
+    baseline_start = max(0, baseline_start)
+    baseline_end   = min(T, baseline_end)
+    
+    # =========================
+    # 3. Baseline power
+    # =========================
+    baseline_power = np.mean(
+        power[:, baseline_start:baseline_end, :],
+        axis=1,
+        keepdims=True
+    )  # shape (epochs, 1, channels)
+
+    # =========================
+    # 4. ERD/ERS computation
+    # =========================
+    erd_ers = (power - baseline_power) / (baseline_power + 1e-10) * 100
+
+    return erd_ers
+
 def quick_visulize():
     #-----------#
     # Constants #
@@ -802,21 +937,21 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_15',
+        subjects = 'subject_16',
         modality = 'EEG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_15',
+        subjects = 'subject_16',
         modality = 'EMG',
         fingers = 'thumb',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_15',
+        subjects = 'subject_16',
         modality = 'Markers',
         fingers = 'thumb',
         prefix = 'flex'
@@ -829,7 +964,7 @@ def quick_visulize():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 0         # Numerical integer
+    SELECT_EXP_DATA = 1         # Numerical integer
     EEG, total_epochs_EEG = load_ins._extract_EEG_data(
         path_to_data_files = EEG_files[SELECT_EXP_DATA],
         preprocessing_func = EEG_ins.preprocessing_routine
@@ -862,7 +997,10 @@ def quick_visulize():
 
 def test_bad_epochs():
     EEG_FREQ = 125
+    EMG_FREQ = 2000
+
     TRIAL_PERIOD = 9
+    TRIM_PERIOD = 3
 
     RMS_SAMPLING_WINDOW = 500           # 250 ms
     RMS_WINDOW_STEPSIZE = 50            # 25 ms (90 % overlap)
@@ -889,83 +1027,542 @@ def test_bad_epochs():
     # EMG -> RANGE given by [0, 1]
     # EEG all CH -> RANGE given [0 : 3]
     # EEG 6 CH -> RANGE given [0 : 2]
+    EEG_LOWCUT = 8
+    EEG_HIGHCUT = 30
+    EMG_LOWCUT = 20
+    EMG_HIGHCUT = 450
+
 
     base_dir = Path().resolve() / 'src/experiment/data'
     load_ins = load_datasets(base_dir = base_dir)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_12',
-        modality = 'EEG',
-        fingers = 'index',
-        prefix = 'flex'
-    )
-
-    EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_12',
-        modality = 'EMG',
-        fingers = 'index',
-        prefix = 'flex'
-    )
-
-    marker_files = load_ins.find_flex_files(
-        subjects = 'subject_12',
-        modality = 'Markers',
-        fingers = 'index',
-        prefix = 'flex'
-    )
-
-    EEG_ins = EEG_preprocessing(fs = 125, bandpass_lowcut = 0.5, bandpass_highcut = 32, trial_period = 9, trim_period = 3)
-    EMG_ins = EMG_preprocessing(fs = 2000, bandpass_lowcut = 20, bandpass_highcut = 450, trial_period = 9, trim_period = 3)
-    reject_ins = RejectBadEpochs(base_dir = base_dir)
-
-    SELECT_EXP = 2
-    EEG, RMS, EMG, epochs_overview = load_ins.load_datasets(
-        path_to_EEG_files = EEG_files,
-        path_to_EMG_files = EMG_files,
-        EEG_preprocessing_func = EEG_ins.preprocessing_routine,
-        EMG_preprocessing_func = EMG_ins.preprocessing_routine,
-        EMG_config_dict = EMG_CONFIG_DICT
-    )
+    # SUBJECT_NAME = ['subject_1', 'subject_0', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6']
+    SUBJECT_NAME = ['subject_1']
+    EEG_USEABLE_CHANNELS = [2, 3, 6]
     
-    markers = load_ins.load_datasets_marker(marker_files)
+    for subj in SUBJECT_NAME:
+        X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+        X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
 
-    reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files,
-                                            epochs_overview = epochs_overview,
-                                            EEG_data = EEG,
-                                            RMS_data = RMS,
-                                            reject_config_dict = REJECT_CONFIG_DICT,
-                                            EEG_useable_channels = None)
+
+    MRCP_index = compute_mrcp(X_epoch_index, baseline_start = 0.0, baseline_end = 3.0, fs = EEG_FREQ)
+    MRCP_thumb = compute_mrcp(X_epoch_thumb, baseline_start = 0.0, baseline_end = 3.0, fs = EEG_FREQ)
     
-    reject_mask_indices = np.where(reject_mask)[0]
-
-    total_epochs = sum(epochs_overview)
-    EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
-    RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, RMS.shape[1])
-    EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, EMG.shape[1])
-    
-    EEG_epoch_clean = EEG_epoch[~reject_mask]
-    RMS_epoch_clean = RMS_epoch[~reject_mask]
-    EMG_epoch_clean = EMG_epoch[~reject_mask]
-    print(EEG_epoch_clean.shape, RMS_epoch_clean.shape, EMG_epoch_clean.shape)
-
-    filt_ins = Filtering()
-    EEG = filt_ins.zscore(EEG_epoch, mode = 'within_ch')
-    EMG = filt_ins.zscore(EMG_epoch, mode = 'within_ch')
-    RMS = filt_ins.zscore(RMS_epoch, mode = 'within_ch')
+    ERD_index = compute_erd_ers(eeg_epoch = X_epoch_index, fs = 125, baseline_start = 0, baseline_end = 3)
+    ERD_thumb = compute_erd_ers(eeg_epoch = X_epoch_thumb, fs = 125, baseline_start = 0, baseline_end = 3)
+    ERD_index = ERD_index.mean(axis=0)
+    ERD_thumb = ERD_thumb.mean(axis=0)
 
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
-    vis_EMG_ins = visualize_EMG(2000, RMS_SAMPLING_WINDOW, RMS_WINDOW_STEPSIZE, total_epochs, 9)
-
-    vis_EMG_ins.plot_rms_across_channels(EMG.reshape(-1, 3), RMS.reshape(-1, 3), markers, display_window=0, bad_epochs = reject_mask_indices)
-    vis_EMG_ins.plot_rms_across_channels(EMG.mean(axis=0), RMS.mean(axis=0), markers, display_window=0, bad_epochs = reject_mask_indices)
-
-    all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = reject_mask_indices)
     
+    # vis_EEG_ins.plot_mrcp(mrcp_index = MRCP_index, mrcp_thumb = MRCP_thumb, useable_channels = EEG_USEABLE_CHANNELS)
+    vis_EEG_ins.plot_mrcp(mrcp_index = X_epoch_index.mean(axis=0), mrcp_thumb = X_epoch_index.mean(axis=0), useable_channels = EEG_USEABLE_CHANNELS, fs = None)
+
+    # vis_EMG_ins = visualize_EMG(2000, RMS_SAMPLING_WINDOW, RMS_WINDOW_STEPSIZE, total_epochs, 9)
+
+    # vis_EMG_ins.plot_rms_across_channels(EMG.reshape(-1, 3), RMS.reshape(-1, 3), markers, display_window=0, bad_epochs = reject_mask_indices)
+    # vis_EMG_ins.plot_rms_across_channels(EMG.mean(axis=0), RMS.mean(axis=0), markers, display_window=0, bad_epochs = reject_mask_indices)
+
+    # all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = reject_mask_indices)
+
+class DataAnalysis():
+    def __init__(self, fs : int, base_dir : Path):
+        self.fs = fs
+        self.trim_period = 3
+        self.trial_period = 9
+        self.base_dir = base_dir
+    
+    def _preprocessing_routine(self, raw_eeg : np.ndarray, lowcut : int, highcut : int) -> tuple[np.ndarray, int]:
+        '''
+        Performs the full preprocessing routine:
+        1) Notch + Bandpass filter
+        2) Resample + z-score standardization + Secmentation into epochs
+
+        Parameters
+        ----------
+        raw_eeg : np.ndarray
+            This holds keys for a specfic class (finger). NOTE - If raw_eeg is a list, it will be converted to a dict with key 'single_class'. 2D array - Dim(samples, channels)
+
+        Return
+        ------
+        :return: np.ndarray of normalized EEG data
+        :return: Int of the total amount of epochs for one experiment
+        '''
+        # ---------------------------#
+        # 1) NOTCH + BANDPASS FILTER #
+        # ---------------------------#
+        EEG_filter_ins = Filtering(fs = self.fs)
+        
+        EEG_notch = EEG_filter_ins.notch(data = raw_eeg, cutoff = 50, Q = 30)
+        EEG_bandpass, _ = EEG_filter_ins.butter_bandpass(data = EEG_notch, lowcut = lowcut, highcut = highcut, order = 4)
+
+        #===============================#
+        # 2) Calculate number of epochs #
+        #===============================#
+        trim_samples = self.fs * self.trim_period           # 375
+        samples_per_epoch = self.fs * self.trial_period
+
+        valid_samples = EEG_bandpass.shape[0] - 2 * trim_samples            # Total samples for experimental period. WHY *2 : Trim egde on both sides
+        num_epochs = int( np.round(valid_samples / samples_per_epoch) )     # Divide out total samples in sections of samples per epoch -> Results in number of epochs
+
+        trim_start = trim_samples
+        trim_end = trim_start + num_epochs * samples_per_epoch              # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
+
+        if (trim_end - trim_start) % samples_per_epoch != 0:                # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print(f"Warning: Samples not perfectly divisible by trial period. Calculated num epochs: {valid_samples / samples_per_epoch}")
+            print(f'Trim samples at start and end: {trim_start}, {trim_end}\n')
+            print(f"Total samples: {EEG_bandpass.shape[0]}, Valid samples: {valid_samples}, Samples per epoch: {samples_per_epoch}, Calculated num epochs: {num_epochs}")
+        
+        #=========#
+        # 3) TRIM #
+        #=========#       
+        EEG_trim = EEG_bandpass[trim_start : trim_end, :]
+        # print(f"Original shape {EEG_bandpass.shape}\n"
+        #       f'EEG_trim shape: {EEG_trim.shape}\n')
+
+        return EEG_trim, num_epochs
+    
+    def load_EEG_data(self, subject_name : str | list, finger_name : str, reject_config_dict : dict, lowcut : int, highcut : int):
+        reject_ins = RejectBadEpochs(base_dir = self.base_dir)
+        load_ins = load_datasets(base_dir = self.base_dir)
+
+        #================#
+        # Find EEG files #
+        #================#
+        EEG_files = load_ins.find_flex_files(
+            subjects = subject_name,
+            modality = "EEG",
+            fingers = finger_name,
+            prefix = 'flex'
+        )
+
+        eeg_data = []
+        epochs_overview = []
+
+        for data_file in EEG_files:
+            print(data_file)
+            raw_data_df = pd.read_csv(data_file)
+            raw_data = raw_data_df.iloc[:, 1:17].to_numpy()
+            
+            # Preprocessing
+            eeg_temp, num_epochs = self._preprocessing_routine(raw_eeg = raw_data, lowcut = lowcut, highcut = highcut)
+
+            eeg_data.append(eeg_temp)
+            epochs_overview.append(num_epochs)
+            
+        EEG = np.concatenate(eeg_data, axis = 0)
+
+        # Should be in sherpa loop 
+        reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files,
+                                                epochs_overview = epochs_overview,
+                                                EEG_data = EEG,
+                                                RMS_data = None,
+                                                reject_config_dict = reject_config_dict,
+                                                EEG_useable_channels = None)
+
+        total_epochs = sum(epochs_overview)
+        EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
+
+        EEG_epoch_clean = EEG_epoch[~reject_mask]
+
+        EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
+
+        filt_ins = Filtering()
+        EEG_epoch_norm = filt_ins.zscore(EEG_car, mode = 'within_ch')
+
+        return EEG_epoch_norm, epochs_overview
+
+    def plot_bandpower_heatmaps(self, data, subjects, REGIONS, BANDS):
+        """
+        Plot heatmaps (Channels x Frequency bands) for each class.
+
+        Parameters
+        ----------
+        data : list of tuples
+            [(feature_dict, label), ...]
+            feature_dict format:
+                {channel: {band: value}}
+        class_names : list
+            Mapping {label: "name"}
+        """
+
+        # data shape : (subjects, classes, regions, bands)
+
+        # -----------------------------
+        # Group data by class
+        # -----------------------------
+        all_mats = []
+
+        for subj_data in data:
+            subj_mats = []
+
+            for feat_dict in subj_data:                      # Extract PSD features (per channel x per band) for Class1 and then class2
+                
+                # Convert dict → matrix (channels × bands)
+                mat = np.zeros((len(REGIONS), len(BANDS)))
+
+                for i, ch in enumerate(REGIONS):
+                    for j, band in enumerate(BANDS):
+                        mat[i, j] = np.mean(feat_dict[ch][band])
+                
+                subj_mats.append(mat)
+            
+            all_mats.append(subj_mats)
+        
+        all_mats = np.array(all_mats)           # Shape: (Subj, class, region, band)
+        
+        S, C, R, B = all_mats.shape
+
+        #======================================#
+        # Normalize color scale across classes #
+        #======================================#
+        fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (4*S, 3*C))
+        class_names = ['Rest', 'Contract', 'Release']
+
+        # all_vals = []
+        # for mats in class_data.values():
+        #     all_vals.append(np.mean(np.array(mats), axis=0))
+
+        vmin = np.min(all_mats)
+        vmax = np.max(all_mats)
+
+        # -----------------------------
+        # Plot heatmap per class
+        # -----------------------------
+        for s in range(S):
+            for c in range(C):
+                ax = axes[c, s] if S > 1 else axes[c]
+
+                mat = all_mats[s, c]            # (R, B)
+
+                im = ax.imshow(mat, aspect='auto', vmin = vmin, vmax = vmax, cmap='viridis')
+
+                for i in range(R):          # regions (rows)
+                    for j in range(B):      # bands (cols)
+                        val = mat[i, j]
+
+                        ax.text(
+                            j, i,
+                            f"{val:.2f}",   # format (2 decimals)
+                            ha='center',
+                            va='center',
+                            color='white' if val < (vmin + vmax)/2 else 'black',
+                            fontsize=7
+                        )
+                
+                # Titles (top row)
+                if c == 0:
+                    ax.set_title(subjects[s])
+
+                # Y labels (left column)
+                if s == 0:
+                    ax.set_ylabel(class_names[c])
+
+                # Axis ticks
+                if c == C - 1:
+                    ax.set_xticks(range(B))
+                    ax.set_xticklabels(BANDS, rotation=45, ha='right', fontsize=8)
+                else:
+                    ax.set_xticks([])
+
+                if s == 0:
+                    ax.set_yticks(range(R))
+                    ax.set_yticklabels(REGIONS, fontsize=9)
+                else:
+                    ax.set_yticks([])
+                
+        # One shared colorbar
+        fig.subplots_adjust(right=0.88)  # make space on the right
+        cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        cbar = fig.colorbar(im, cax=cbar_ax)
+        cbar.set_label("PSD (µV²/Hz)", fontsize=10)
+
+        # plt.tight_layout()
+        plt.show()
+
+    def segment_into_periods(self, epochs):
+        rest = epochs[:, : 3*self.fs, :]
+        contract = epochs[:, 3*self.fs : 6*self.fs, :]
+        release =  epochs[:, 6*self.fs : , :]
+
+        return rest, contract, release
+    
+    def compute_trialwise_region_psd(self, data_class : np.ndarray, REGIONS : Dict, FREQ_BANDS : Dict, EEG_channel_names : List, EEG_FREQ : int):
+        """
+        Compute trial-wise PSD features aggregated per region.
+
+        Parameters
+        ----------
+        data_class : np.ndarray
+            Shape (trials, samples, channels)
+
+        Returns
+        -------
+        region_features : dict
+            {region: {band: [values_per_trial]}}
+        """
+
+        region_features = {                         # Create a dict per region and its bands
+        region: {band: [] for band in FREQ_BANDS.keys()}
+        for region in REGIONS.keys()
+        }
+
+        N_trials = data_class.shape[0]
+
+        for trial in range(N_trials):
+
+            for region_name, ch_list in REGIONS.items():
+
+                trial_band_values = {band: [] for band in FREQ_BANDS.keys()}    # Dict of freq bands
+
+                for ch in ch_list:
+                    ch_idx = EEG_channel_names.index(ch)                        # Extract index where channel belong
+
+                    signal = data_class[trial, :, ch_idx]
+
+                    nperseg = min(256, len(signal))                             # safer for short trials
+                    f, Pxx = welch(signal, fs = EEG_FREQ, nperseg = nperseg)
+
+                    total_power = np.trapz(Pxx, f)
+
+                    if total_power == 0:                                        # Avoid division by zero
+                        continue
+
+                    for freq_name, (low, high) in FREQ_BANDS.items():
+                        idx = (f >= low) & (f <= high)
+
+                        if np.any(idx):
+                            band_power = np.trapz(Pxx[idx], f[idx])
+                            rel_power = band_power / total_power
+                            trial_band_values[freq_name].append(rel_power)      # Contain freq bands per channel, Like {'delta': [Fp1, Fp2], 'theta': [Fp1, Fp2], ...}
+                
+                for band in FREQ_BANDS.keys():
+                    if len(trial_band_values[band]) > 0:
+
+                        region_features[region_name][band].append(np.mean(trial_band_values[band]))
+        
+        return region_features
+
+      
+    def cohens_d(self, x1, x2):
+        n1, s1, m1 = len(x1), np.std(x1), np.mean(x1)
+        n2, s2, m2 = len(x2), np.std(x2), np.mean(x2)
+
+        S_pool = np.sqrt( (s1**2 * (n1 - 1) + s2**2 * (n2 - 1)) / (n1 + n2 - 2) )
+        
+        if S_pool == 0:
+            return 0
+        
+        return (m1 - m2) / S_pool
+    
+    def compute_multiclass_separability(self, data_classes, REGIONS, BANDS):
+        class_pairs = [
+            (0, 1),  # rest vs contract
+            (0, 2),  # rest vs release
+            (1, 2)   # contract vs release
+        ]
+        comparison_names = [
+        "rest vs contract",
+        "rest vs release",
+        "contract vs release"
+        ]
+
+        d_all_subjects = []
+        R = len(REGIONS)
+        B = len(BANDS)
+
+        for subj in data_classes:
+            print(len(subj))
+
+            d_subject = []
+
+            for c1, c2 in class_pairs:
+                d_map = np.zeros((R, B))
+
+                for i, r in enumerate(REGIONS):
+                    for j, b in enumerate(BANDS):
+                        x1 = subj[c1][r][b]            # across trials (trials, r, b)
+                        x2 = subj[c2][r][b]
+
+                        d_map[i, j] = self.cohens_d(x1, x2)
+                
+                d_subject.append(d_map)
+                
+            d_all_subjects.append(d_subject)
+        
+        d_all_subjects = np.array(d_all_subjects)                       # shape: (subjects, comparisons, regions, bands)
+
+        d_abs = np.abs(d_all_subjects)
+
+        d_mean = np.mean(d_abs, axis=0)
+        d_std  = np.std(d_abs, axis=0)
+
+        return d_mean, d_std, comparison_names
+    
+def inspect_frequency_ranges():
+    EEG_FREQ = 125
+    EEG_LOWCUT = 0.5
+    EEG_HIGHCUT = 60
+    REJECT_CONFIG_DICT = {
+        'EEG_epoch_rejection_tolerance' : 6,
+        'EMG_epoch_rejection_tolerance' : 6,
+        'EEG_ch_acceptance' : 0,
+        'EMG_ch_acceptance' : 0
+    }
+
+    base_dir = Path().resolve() / 'src/experiment/data'
+    data_ins = DataAnalysis(fs = EEG_FREQ, base_dir = base_dir)
+
+    # SUBJECT_NAME = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11']
+    FREQ_BANDS = {
+    "delta": (0.5, 4),
+    "theta": (4, 8),
+    "alpha": (8, 13),
+    "beta": (13, 30),
+    "gamma": (30, 60)
+    }
+    REGIONS = {
+    "prefrontal": ['Fp1', 'Fp2'],
+    "frontal": ['F3', 'F4', 'F7', 'F8', 'Fz'],
+    "central": ['C3', 'C4', 'Cz'],
+    "temporal": ['T3', 'T4', 'T5', 'T6'],
+    "parietal": ['P3', 'P4']
+    }
+    NUM_CH = 16
+
+    SUBJECT_NAME = ['subject_0', 'subject_1', 'subject_2', 'subject_3']
+    all_subject_data = []
+    for subj in SUBJECT_NAME:
+        #==============#
+        # Load dataset #
+        #==============#
+        X_epoch_index, _ = data_ins.load_EEG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, lowcut = EEG_LOWCUT, highcut = EEG_HIGHCUT)
+        X_epoch_thumb, _ = data_ins.load_EEG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, lowcut = EEG_LOWCUT, highcut = EEG_HIGHCUT)
+
+        #===========================#
+        # Extract onset period      #
+        # Reshape to continous data #
+        #===========================#
+        X1_rest, X1_con, X1_rel = data_ins.segment_into_periods(epochs = X_epoch_index)     # shape: (E, S, C) -> (E*S, C)
+        X2_rest, X2_con, X2_rel = data_ins.segment_into_periods(epochs = X_epoch_thumb)
+
+        X_rest = np.concatenate((X1_rest, X2_rest), axis=0)
+        X_con = np.concatenate((X1_con, X2_con), axis=0)
+        X_rel = np.concatenate((X1_rel, X2_rel), axis=0)
+
+        LABELS = ['rest', 'contract', 'release']
+        
+        data_classes = []                   # Container for classes with regions_features
+
+        for data_class in [X_rest, X_con, X_rel]: 
+
+            region_features = data_ins.compute_trialwise_region_psd(
+                data_class = data_class,
+                REGIONS = REGIONS,
+                FREQ_BANDS = FREQ_BANDS,
+                EEG_channel_names = EEG_channel_names,
+                EEG_FREQ = EEG_FREQ
+            )
+
+            data_classes.append(region_features)                        
+
+        # all_subjects_data =
+        # [
+        #     [dict_rest, dict_con, dict_rel],   # subject 0
+        #     [dict_rest, dict_con, dict_rel],   # subject 1
+        # ]
+        all_subject_data.append(data_classes)
+
+    all_subject_data = np.array(all_subject_data)
+    
+    # data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS)
+
+    d_mean, d_std, comparison_names = data_ins.compute_multiclass_separability(all_subject_data, REGIONS=REGIONS, BANDS=FREQ_BANDS)
+    
+    
+    all_mats = d_mean
+    C, R, B = all_mats.shape
+    S = 1
+    #======================================#
+    # Normalize color scale across classes #
+    #======================================#
+    fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (4*S, 3*C))
+    class_names = ['Rest', 'Contract', 'Release']
+
+    vmin = np.min(all_mats)
+    vmax = np.max(all_mats)
+
+    # -----------------------------
+    # Plot heatmap per class
+    # -----------------------------
+    for s in range(S):
+        for c in range(C):
+            ax = axes[c, s] if S > 1 else axes[c]
+
+            mat = all_mats[c]            # (R, B)
+
+            im = ax.imshow(mat, aspect='auto', vmin = vmin, vmax = vmax, cmap='viridis')
+
+            for i in range(R):          # regions (rows)
+                for j in range(B):      # bands (cols)
+                    val = mat[i, j]
+
+                    ax.text(
+                        j, i,
+                        f"{val:.2f}",   # format (2 decimals)
+                        ha='center',
+                        va='center',
+                        color='white' if val < (vmin + vmax)/2 else 'black',
+                        fontsize=7
+                    )
+            
+            # Titles (top row)
+            
+            ax.set_title(comparison_names[c])
+
+            # Y labels (left column)
+            if s == 0:
+                ax.set_ylabel(class_names[c])
+
+            # Axis ticks
+            if c == C - 1:
+                ax.set_xticks(range(B))
+                ax.set_xticklabels(FREQ_BANDS, rotation=45, ha='right', fontsize=8)
+            else:
+                ax.set_xticks([])
+
+            if s == 0:
+                ax.set_yticks(range(R))
+                ax.set_yticklabels(REGIONS, fontsize=9)
+            else:
+                ax.set_yticks([])
+            
+    # One shared colorbar
+    fig.subplots_adjust(right=0.88)  # make space on the right
+    cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+    cbar = fig.colorbar(im, cax=cbar_ax)
+    cbar.set_label("PSD (µV²/Hz)", fontsize=10)
+
+    # plt.tight_layout()
+    plt.show()
+    # 0.2 = Small effect
+    # 0.5 = Moderate effect
+    # 0.8 = Large effect 
+    # for region, bands in d_mean.items():
+    #     print(f"\nRegion: {region}")
+
+    #     for band, d in bands.items():
+    #         print(f"  {band}: {d:.3f}")
+        
+
 if __name__ == '__main__':
     # remove_bad_epochs()
-    quick_visulize()
+    # quick_visulize()
     # test_bad_epochs()
+    inspect_frequency_ranges()
 
     # base_dir = Path().resolve() / 'src/experiment/data'
     # load_ins = load_datasets(base_dir=base_dir)

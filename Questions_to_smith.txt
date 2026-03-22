@@ -1,0 +1,6 @@
+1) How to implement ICA, it hard to tell if the ICA components contain informative information or just artifacts.
+
+2) How to label data when using a sliding window - For real time predictions
+
+3) Real time sliding window : (with/without overlap), window size, step_size, circular queue
+    * 
