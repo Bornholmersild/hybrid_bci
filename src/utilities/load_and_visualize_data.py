@@ -340,10 +340,10 @@ class load_datasets():
         RMS_epoch_clean = RMS_epoch[~reject_mask]
         EMG_epoch_clean = EMG_epoch[~reject_mask] if EMG is not None else None
 
-        EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
+        EEG_epoch_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
         
         filt_ins = Filtering()
-        EEG_epoch_norm = filt_ins.zscore(EEG_car, mode = 'within_ch')
+        EEG_epoch_norm = filt_ins.zscore(EEG_epoch_car, mode = 'within_ch')
         RMS_epoch_norm = filt_ins.zscore(RMS_epoch_clean, mode = 'within_ch')
         EMG_epoch_norm = filt_ins.zscore(EMG_epoch_clean, mode = 'within_ch') if EMG is not None else None
 
@@ -408,28 +408,29 @@ class load_datasets():
         The user can then fill in the bad epochs for each experiment in the JSON file and the manual rejection function will read the bad epochs from the JSON file and reject the epochs accordingly.
         '''
 
-        # Define subject ID and fingers to append new bad epoch keys to the JSON file.
-        data_file = self.find_flex_files(        
-            subjects = ['subject_12'],
-            modality = 'EEG',
-            fingers = 'thumb',
-            prefix = 'flex'
-        )
-        
-        manual_dict = {}
-        save_dir = self.base_dir / 'manual_bad_epochs.json'
-
-        for file in data_file:
-            path = Path(file)
-
-            subject = path.parents[1].name     # Get subject ID
-            filename = path.stem               # Get experiment and remove .csv
+        for subj in ['subject_13', 'subject_14', 'subject_15', 'subject_16']:
+            # Define subject ID and fingers to append new bad epoch keys to the JSON file.
+            data_file = self.find_flex_files(        
+                subjects = subj,
+                modality = 'EEG',
+                fingers = 'index',
+                prefix = 'flex'
+            )
             
-            key = f'{subject}_{filename}'           # Create key in format "subjectID_experiment"
-            manual_dict[key] = []   # empty bad epochs
+            manual_dict = {}
+            save_dir = self.base_dir / 'manual_bad_epochs.json'
 
-        with open(save_dir, "a") as f:
-            json.dump(manual_dict, f, indent=4)
+            for file in data_file:
+                path = Path(file)
+
+                subject = path.parents[1].name     # Get subject ID
+                filename = path.stem               # Get experiment and remove .csv
+                
+                key = f'{subject}_{filename}'           # Create key in format "subjectID_experiment"
+                manual_dict[key] = []   # empty bad epochs
+
+            with open(save_dir, "a") as f:
+                json.dump(manual_dict, f, indent=4)
 
 class plot_toolbox():
     def add_markers_to_plot(self, plt_axis, marker_file, stop_markers_at = None):
@@ -996,8 +997,16 @@ def quick_visulize():
     # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 def test_bad_epochs():
-    EEG_FREQ = 125
+    #-----------#
+    # Constants #
+    #-----------#
     EMG_FREQ = 2000
+    EEG_FREQ = 125
+    
+    EMG_LOWCUT = 20
+    EMG_HIGHCUT = 450
+    EEG_LOWCUT = 0.5          # 2          MRCP: 0.05-3 Hz  , Sensorimotor rhythms: 8-30 Hz, 
+    EEG_HIGHCUT = 30        # 32
 
     TRIAL_PERIOD = 9
     TRIM_PERIOD = 3
@@ -1016,7 +1025,7 @@ def test_bad_epochs():
         'hampel_plot_option' : [False, None],
         'include_EMG' : True
     }
-
+    
     REJECT_CONFIG_DICT = {
         'EEG_epoch_rejection_tolerance' : 6,
         'EMG_epoch_rejection_tolerance' : 6,
@@ -1027,46 +1036,80 @@ def test_bad_epochs():
     # EMG -> RANGE given by [0, 1]
     # EEG all CH -> RANGE given [0 : 3]
     # EEG 6 CH -> RANGE given [0 : 2]
-    EEG_LOWCUT = 8
-    EEG_HIGHCUT = 30
-    EMG_LOWCUT = 20
-    EMG_HIGHCUT = 450
 
 
+    #------------------------#
+    # Select what to inspect #
+    #------------------------#
     base_dir = Path().resolve() / 'src/experiment/data'
+    
     load_ins = load_datasets(base_dir = base_dir)
+
+    EEG_files = load_ins.find_flex_files(
+        subjects = 'subject_16',
+        modality = 'EEG',
+        fingers = 'thumb',
+        prefix = 'flex'
+    )
+
+    EMG_files = load_ins.find_flex_files(
+        subjects = 'subject_16',
+        modality = 'EMG',
+        fingers = 'thumb',
+        prefix = 'flex'
+    )
+
+    marker_files = load_ins.find_flex_files(
+        subjects = 'subject_16',
+        modality = 'Markers',
+        fingers = 'thumb',
+        prefix = 'flex'
+    )
+
+    #-----------#
+    # Load data #
+    #-----------#
+    reject_ins = RejectBadEpochs(base_dir = base_dir)
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    # SUBJECT_NAME = ['subject_1', 'subject_0', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6']
-    SUBJECT_NAME = ['subject_1']
-    EEG_USEABLE_CHANNELS = [2, 3, 6]
-    
-    for subj in SUBJECT_NAME:
-        X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
-        X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    SELECT_EXP_DATA = 2        # Numerical integer
+    EEG, total_epochs_EEG = load_ins._extract_EEG_data(
+        path_to_data_files = EEG_files[SELECT_EXP_DATA],
+        preprocessing_func = EEG_ins.preprocessing_routine
+    )
 
+    RMS, EMG, epochs_overview = load_ins._extract_EMG_data(         # Without reject bad epochs
+        path_to_data_files = EMG_files[SELECT_EXP_DATA],
+        preprocessing_func = EMG_ins.preprocessing_routine,
+        EMG_config_dict = EMG_CONFIG_DICT
+    )
 
-    MRCP_index = compute_mrcp(X_epoch_index, baseline_start = 0.0, baseline_end = 3.0, fs = EEG_FREQ)
-    MRCP_thumb = compute_mrcp(X_epoch_thumb, baseline_start = 0.0, baseline_end = 3.0, fs = EEG_FREQ)
-    
-    ERD_index = compute_erd_ers(eeg_epoch = X_epoch_index, fs = 125, baseline_start = 0, baseline_end = 3)
-    ERD_thumb = compute_erd_ers(eeg_epoch = X_epoch_thumb, fs = 125, baseline_start = 0, baseline_end = 3)
-    ERD_index = ERD_index.mean(axis=0)
-    ERD_thumb = ERD_thumb.mean(axis=0)
+    markers = load_ins.load_datasets_marker(marker_files)[SELECT_EXP_DATA]
 
+    reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files[SELECT_EXP_DATA],
+                                            epochs_overview = epochs_overview,
+                                            EEG_data = EEG,
+                                            RMS_data = RMS,
+                                            reject_config_dict = REJECT_CONFIG_DICT,
+                                            EEG_useable_channels = None)
+
+    total_epochs = np.sum(epochs_overview)
+    bad_epochs = np.where(reject_mask)[0]
+
+    EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, 3)
+    RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, 3)
+    EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, 16)
+
+    vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
-    
-    # vis_EEG_ins.plot_mrcp(mrcp_index = MRCP_index, mrcp_thumb = MRCP_thumb, useable_channels = EEG_USEABLE_CHANNELS)
-    vis_EEG_ins.plot_mrcp(mrcp_index = X_epoch_index.mean(axis=0), mrcp_thumb = X_epoch_index.mean(axis=0), useable_channels = EEG_USEABLE_CHANNELS, fs = None)
 
-    # vis_EMG_ins = visualize_EMG(2000, RMS_SAMPLING_WINDOW, RMS_WINDOW_STEPSIZE, total_epochs, 9)
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = markers, display_window = 0, bad_epochs = bad_epochs)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
 
-    # vis_EMG_ins.plot_rms_across_channels(EMG.reshape(-1, 3), RMS.reshape(-1, 3), markers, display_window=0, bad_epochs = reject_mask_indices)
-    # vis_EMG_ins.plot_rms_across_channels(EMG.mean(axis=0), RMS.mean(axis=0), markers, display_window=0, bad_epochs = reject_mask_indices)
-
-    # all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = reject_mask_indices)
+    all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = bad_epochs)
+    # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 class DataAnalysis():
     def __init__(self, fs : int, base_dir : Path):
@@ -1281,6 +1324,7 @@ class DataAnalysis():
         cbar.set_label("PSD (µV²/Hz)", fontsize=10)
 
         # plt.tight_layout()
+        # plt.savefig('band_power_heatmap_subjects_8-11.png', dpi = 400)
         plt.show()
 
     def segment_into_periods(self, epochs):
@@ -1322,9 +1366,8 @@ class DataAnalysis():
                     ch_idx = EEG_channel_names.index(ch)                        # Extract index where channel belong
 
                     signal = data_class[trial, :, ch_idx]
-
-                    nperseg = min(256, len(signal))                             # safer for short trials
-                    f, Pxx = welch(signal, fs = EEG_FREQ, nperseg = nperseg)
+                    
+                    f, Pxx = welch(signal, fs = EEG_FREQ, nperseg = len(signal))
 
                     total_power = np.trapz(Pxx, f)
 
@@ -1369,7 +1412,7 @@ class DataAnalysis():
         "rest vs release",
         "contract vs release"
         ]
-
+        
         d_all_subjects = []
         R = len(REGIONS)
         B = len(BANDS)
@@ -1433,7 +1476,7 @@ def inspect_frequency_ranges():
     }
     NUM_CH = 16
 
-    SUBJECT_NAME = ['subject_0', 'subject_1', 'subject_2', 'subject_3']
+    SUBJECT_NAME = ['subject_0','subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']     
     all_subject_data = []
     for subj in SUBJECT_NAME:
         #==============#
@@ -1478,8 +1521,8 @@ def inspect_frequency_ranges():
 
     all_subject_data = np.array(all_subject_data)
     
-    # data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS)
-
+    data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS)
+    
     d_mean, d_std, comparison_names = data_ins.compute_multiclass_separability(all_subject_data, REGIONS=REGIONS, BANDS=FREQ_BANDS)
     
     
@@ -1489,7 +1532,7 @@ def inspect_frequency_ranges():
     #======================================#
     # Normalize color scale across classes #
     #======================================#
-    fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (4*S, 3*C))
+    fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (8*S, 3*C))        # 4*S, 3*C
     class_names = ['Rest', 'Contract', 'Release']
 
     vmin = np.min(all_mats)
@@ -1525,7 +1568,7 @@ def inspect_frequency_ranges():
 
             # Y labels (left column)
             if s == 0:
-                ax.set_ylabel(class_names[c])
+                ax.set_ylabel('Regions')
 
             # Axis ticks
             if c == C - 1:
@@ -1544,9 +1587,10 @@ def inspect_frequency_ranges():
     fig.subplots_adjust(right=0.88)  # make space on the right
     cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
     cbar = fig.colorbar(im, cax=cbar_ax)
-    cbar.set_label("PSD (µV²/Hz)", fontsize=10)
+    cbar.set_label("Cohen's d", fontsize=10)
 
     # plt.tight_layout()
+    # plt.savefig('cohen_d_across_subject_.png', dpi = 400)
     plt.show()
     # 0.2 = Small effect
     # 0.5 = Moderate effect
@@ -1563,6 +1607,7 @@ if __name__ == '__main__':
     # quick_visulize()
     # test_bad_epochs()
     inspect_frequency_ranges()
+    
 
     # base_dir = Path().resolve() / 'src/experiment/data'
     # load_ins = load_datasets(base_dir=base_dir)

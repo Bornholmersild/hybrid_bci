@@ -27,7 +27,7 @@ class FusionNet_train_eval():
             optimizer.zero_grad()
 
             # Make predictions for this batch
-            final_logits, eeg_logits, emg_logits, _, _ = model(eeg = X_eeg, emg = X_emg)
+            final_logits, eeg_logits, emg_logits = model(eeg = X_eeg, emg = X_emg)
 
             # Compute the loss and its gradients
             loss_final = criterion(final_logits, y_emg)        # EMG has all 5 lables (contract per finger, release per finger, rest all fingers)
@@ -72,7 +72,7 @@ class FusionNet_train_eval():
                 X_veeg, X_vemg, y_veeg, y_vemg = eeg.to(device), emg.to(device), eeg_lab.to(device), emg_lab.to(device)
 
                 # Forward pass: compute predicted outputs by passing inputs to the model
-                final_vlogits, eeg_vlogits, emg_vlogits, _, _ = model(eeg = X_veeg, emg = X_vemg)
+                final_vlogits, eeg_vlogits, emg_vlogits = model(eeg = X_veeg, emg = X_vemg)
    
                 # Compute the loss and its gradients
                 loss_final = criterion(final_vlogits, y_vemg)        # EMG has all 5 lables (contract per finger, release per finger, rest all fingers)
@@ -152,7 +152,7 @@ class FusionNet_train_eval():
                 X_eeg, X_emg, y_eeg, y_emg = eeg.to(device), emg.to(device), eeg_lab.to(device), emg_lab.to(device)
 
                 # Forward pass
-                final_logits, eeg_logits, emg_logits, _, _ = model(eeg = X_eeg, emg = X_emg)
+                final_logits, eeg_logits, emg_logits = model(eeg = X_eeg, emg = X_emg)
 
                 # Compute the loss and its gradients
                 loss_final = criterion(final_logits, y_emg)        # EMG has all 5 lables (contract per finger, release per finger, rest all fingers)

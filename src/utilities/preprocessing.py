@@ -460,13 +460,14 @@ class RejectBadEpochs():
         subject = file.parents[1].name
         filename = file.stem
         key = f'{subject}_{filename}'
+        
 
         with open(bad_epoch_files, 'r') as f:
             manual_json = json.load(f)                      # Load json file
 
             manual = manual_json[key]                       # Search for key in json file
             bad_manual = np.zeros(num_epochs, dtype=bool)   # Create np.ndarray of default false values corresponding to num_epochs size
-            
+        
             bad_manual[manual] = True                       # Convert indicies to True if mentioned in json file 
         
         return bad_manual

@@ -4,3 +4,11 @@
 
 3) Real time sliding window : (with/without overlap), window size, step_size, circular queue
     * 
+
+4) I do train-validation-test split with LOSO
+    * I iterate over 250 epochs for the whole dataset
+    * I that the one subject left out is only for testing and not validation.
+
+    - I did wonder if cross-validation was better
+
+5) Loss function
