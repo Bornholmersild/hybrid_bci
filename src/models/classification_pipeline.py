@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-# from statsmodels.stats.contingency_tables import mcnemar
+from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
@@ -207,6 +207,12 @@ class Attention(nn.Module):
         self.attn = nn.Linear(hidden_dim * 2, hidden_dim)
         self.v = nn.Parameter(torch.randn(hidden_dim))           # Learnable vector to scalar score for each time step. Weights are updated during backpropagation
 
+        # 🔹 Learnable query vector
+        # self.query = nn.Parameter(torch.randn(hidden_dim))
+        # 🔹 Expand query to match sequence
+        # q = self.query.unsqueeze(0).unsqueeze(0)   # (1, 1, H)
+        # Q = q.expand(B, S, H)                      # (B, S, H)
+
     def forward(self, hidden, encoder_outputs):
         batch_size = encoder_outputs.shape[0]
         seq_len = encoder_outputs.shape[1]
@@ -221,8 +227,8 @@ class Attention(nn.Module):
         # and each encoder hidden state 'h_i' are combined to compute alignment scores 'e_t,i'. #
         # energy (e_t,i) = v^T * tanh(W_a * [S_t; h_i]) where S_t is query and h_i is keys      #
         #=======================================================================================#
-        St_hi = torch.cat((Q, K), dim=2)         # (B, S, 2H)
-        energy = torch.tanh(self.attn(St_hi))                       # (B, S, H) - Learns a transformation from the concatenated decoder-hidden + encoder-output to an intermediate "energy" vector
+        QK = torch.cat((Q, K), dim=2)         # (B, S, 2H)
+        energy = torch.tanh(self.attn(QK))                       # (B, S, H) - Learns a transformation from the concatenated decoder-hidden + encoder-output to an intermediate "energy" vector
         energy = energy.permute(0, 2, 1)                            # (B, H, S) - Permute for batch matrix multiplication
 
         #==================================#
@@ -961,7 +967,6 @@ class FusionNet_CNN_LSTM_ATTENTION(nn.Module):
 #=================#
 # Handles dataset #
 #=================#
-
 class SingleManageDataset(torch.utils.data.Dataset):
     def __init__(self, data, labels, data_type):
         '''

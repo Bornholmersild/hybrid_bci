@@ -408,12 +408,12 @@ class load_datasets():
         The user can then fill in the bad epochs for each experiment in the JSON file and the manual rejection function will read the bad epochs from the JSON file and reject the epochs accordingly.
         '''
 
-        for subj in ['subject_13', 'subject_14', 'subject_15', 'subject_16']:
+        for finger in ['middle', 'ring', 'pinky', 'pinchGrip', 'fullGrip']:
             # Define subject ID and fingers to append new bad epoch keys to the JSON file.
             data_file = self.find_flex_files(        
-                subjects = subj,
+                subjects = 'subject_0',
                 modality = 'EEG',
-                fingers = 'index',
+                fingers = finger,
                 prefix = 'flex'
             )
             
@@ -938,23 +938,23 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'EEG',
-        fingers = 'thumb',
+        fingers = 'ring',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'EMG',
-        fingers = 'thumb',
+        fingers = 'ring',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'Markers',
-        fingers = 'thumb',
+        fingers = 'ring',
         prefix = 'flex'
     )
 
@@ -965,19 +965,19 @@ def quick_visulize():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 1         # Numerical integer
+    SELECT_EXP_DATA = 0         # Numerical integer
     EEG, total_epochs_EEG = load_ins._extract_EEG_data(
-        path_to_data_files = EEG_files[SELECT_EXP_DATA],
+        path_to_data_files = EEG_files[:],
         preprocessing_func = EEG_ins.preprocessing_routine
     )
 
     RMS, EMG, epochs_overview = load_ins._extract_EMG_data(         # Without reject bad epochs
-        path_to_data_files = EMG_files[SELECT_EXP_DATA],
+        path_to_data_files = EMG_files[:],
         preprocessing_func = EMG_ins.preprocessing_routine,
         EMG_config_dict = EMG_CONFIG_DICT
     )
 
-    markers = load_ins.load_datasets_marker(marker_files)[SELECT_EXP_DATA]
+    markers = load_ins.load_datasets_marker(marker_files)
 
     total_epochs = np.sum(epochs_overview)
 
@@ -1046,23 +1046,23 @@ def test_bad_epochs():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'EEG',
-        fingers = 'thumb',
+        fingers = 'fullGrip',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'EMG',
-        fingers = 'thumb',
+        fingers = 'fullGrip',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'Markers',
-        fingers = 'thumb',
+        fingers = 'fullGrip',
         prefix = 'flex'
     )
 
@@ -1073,7 +1073,7 @@ def test_bad_epochs():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 2        # Numerical integer
+    SELECT_EXP_DATA = 0        # Numerical integer
     EEG, total_epochs_EEG = load_ins._extract_EEG_data(
         path_to_data_files = EEG_files[SELECT_EXP_DATA],
         preprocessing_func = EEG_ins.preprocessing_routine
@@ -1083,7 +1083,7 @@ def test_bad_epochs():
         path_to_data_files = EMG_files[SELECT_EXP_DATA],
         preprocessing_func = EMG_ins.preprocessing_routine,
         EMG_config_dict = EMG_CONFIG_DICT
-    )
+    )   
 
     markers = load_ins.load_datasets_marker(marker_files)[SELECT_EXP_DATA]
 
@@ -1101,6 +1101,10 @@ def test_bad_epochs():
     RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, 3)
     EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, 16)
 
+    zscore = Filtering(fs = 0).zscore
+    EMG = zscore(EMG)
+    RMS = zscore(RMS)
+
     vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
 
@@ -1108,7 +1112,7 @@ def test_bad_epochs():
     # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
 
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = bad_epochs)
+    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3, bad_epochs = bad_epochs)
     # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 class DataAnalysis():
@@ -1600,12 +1604,11 @@ def inspect_frequency_ranges():
     #     for band, d in bands.items():
     #         print(f"  {band}: {d:.3f}")
         
-
 if __name__ == '__main__':
     # remove_bad_epochs()
     # quick_visulize()
-    # test_bad_epochs()
-    inspect_frequency_ranges()
+    test_bad_epochs()
+    #inspect_frequency_ranges()
     
 
     # base_dir = Path().resolve() / 'src/experiment/data'
