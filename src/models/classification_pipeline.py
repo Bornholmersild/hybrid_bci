@@ -178,6 +178,7 @@ class CNN(nn.Module):
             nn.MaxPool1d(kernel_size = 2),
             
             nn.Dropout(dropout)
+            
         )
     
     def forward(self, data : torch.Tensor):
@@ -204,19 +205,23 @@ class Attention(nn.Module):
     def __init__(self, hidden_dim):
         super(Attention, self).__init__()
         self.attn = nn.Linear(hidden_dim * 2, hidden_dim)
-        self.v = nn.Parameter(torch.randn(hidden_dim))           # Learnable vector to scalar score for each time step.
+        self.v = nn.Parameter(torch.randn(hidden_dim))           # Learnable vector to scalar score for each time step. Weights are updated during backpropagation
 
     def forward(self, hidden, encoder_outputs):
         batch_size = encoder_outputs.shape[0]
         seq_len = encoder_outputs.shape[1]
-        hidden = hidden.unsqueeze(1).expand(-1, seq_len, -1)      # (B, H) -> (B, 1, H) -> (B, seq_len, H)
+
+        Q = hidden.unsqueeze(1)                                      # (B, H) -> (B, 1, H) - Prepare the decoder hidden state as the query for attention
+        K = encoder_outputs                                          # (B, S, H) - Encoder hidden states serve as keys for attention
+
+        Q = Q.expand(-1, seq_len, -1)                                # (B, 1, H) -> (B, seq_len, H)
 
         #=======================================================================================#
         # Step 1)  Feed-Forward Alignment Function: The decoder’s current hidden state 'S_t'    #
         # and each encoder hidden state 'h_i' are combined to compute alignment scores 'e_t,i'. #
         # energy (e_t,i) = v^T * tanh(W_a * [S_t; h_i]) where S_t is query and h_i is keys      #
         #=======================================================================================#
-        St_hi = torch.cat((hidden, encoder_outputs), dim=2)         # (B, S, 2H)
+        St_hi = torch.cat((Q, K), dim=2)         # (B, S, 2H)
         energy = torch.tanh(self.attn(St_hi))                       # (B, S, H) - Learns a transformation from the concatenated decoder-hidden + encoder-output to an intermediate "energy" vector
         energy = energy.permute(0, 2, 1)                            # (B, H, S) - Permute for batch matrix multiplication
 
@@ -233,7 +238,7 @@ class Attention(nn.Module):
         # that sum to 1 across all encoder time steps.      #
         #===================================================#
         weights = torch.softmax(scores, dim=1)
-        context = torch.bmm(weights.unsqueeze(1), encoder_outputs)  # (B, 1, S) × (B, S, H) -> (B, 1, H) - Compute the context vector as a weighted sum of encoder hidden states
+        context = torch.bmm(weights.unsqueeze(1), K)  # (B, 1, S) × (B, S, H) -> (B, 1, H) - Compute the context vector as a weighted sum of encoder hidden states
 
         return context, weights
     
@@ -969,6 +974,8 @@ class SingleManageDataset(torch.utils.data.Dataset):
             labels = self._map_to_emg_labels(labels = labels)
         elif data_type == 'EMG':
             labels = labels
+        elif data_type == 'BCI_IV_2a':
+            labels = labels
         else:
             raise ValueError('data_type must be either EEG or EMG')
         
@@ -1453,9 +1460,6 @@ def check_model(model_name : str = None, sensor_name : str = None):
 # Traning of model Per subject #
 #==============================#
 def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None):
-    # When chancing between EEG and EMG
-    # preprocessing instance
-    # Load function
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
     print(f"Using device: {device}")

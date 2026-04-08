@@ -8,6 +8,7 @@ import sherpa
 # Manage datasets
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # Manage utils
 import os 
@@ -15,7 +16,8 @@ from pathlib import Path
 from datetime import datetime
 import logging                  # Avoid loggings from GP
 from copy import deepcopy       # Used for copy model_state
-import time
+from typing import Dict, List
+from scipy.signal import welch
 
 # Feature extraction
 import scipy.stats as stats
@@ -27,7 +29,7 @@ import antropy as ant
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
 from src.utilities.trainer_and_evaluator import SingleNet_train_eval
 from src.utilities.load_and_visualize_data import load_datasets, visualize_EEG
-from src.models.classification_pipeline import SingleNet, SingleNet_CNN, SingleManageDataset, ExperimentLogger, SingleManageDataset, build_optimizer, inspect_model
+from src.models.classification_pipeline import ExperimentLogger, SingleManageDataset, SingleNetHandler #SingleNet, SingleNet_CNN, SingleManageDataset, ExperimentLogger, SingleManageDataset, build_optimizer, inspect_model
 
 # Avoid messages for sherpa
 logging.getLogger("GP").setLevel(logging.CRITICAL)
@@ -263,9 +265,9 @@ class BCI2a_preprocess():
 
         EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
 
-        # EEG_epoch_norm = EEG_filter_ins.zscore(EEG_car, mode = 'within_ch')
+        EEG_epoch_norm = EEG_filter_ins.zscore(EEG_car, mode = 'within_ch')
 
-        return EEG_car, reject_mask
+        return EEG_epoch_norm, reject_mask
     
 class Feature_Extraction():
     def __init__(self, fs = 250, window_size = 150, step_size = 75):
@@ -581,15 +583,533 @@ class Feature_Extraction():
         print(f'Final X_test shape: {X_test.shape}')
 
         return X_train, X_test
+
+class DataAnalysis():
+    def __init__(self, fs : int, base_dir : Path):
+        self.fs = fs
+        self.trim_period = 3
+        self.trial_period = 9
+        self.base_dir = base_dir
     
+    def _preprocessing_routine(self, raw_eeg : np.ndarray, lowcut : int, highcut : int) -> tuple[np.ndarray, int]:
+        '''
+        Performs the full preprocessing routine:
+        1) Notch + Bandpass filter
+        2) Resample + z-score standardization + Secmentation into epochs
+
+        Parameters
+        ----------
+        raw_eeg : np.ndarray
+            This holds keys for a specfic class (finger). NOTE - If raw_eeg is a list, it will be converted to a dict with key 'single_class'. 2D array - Dim(samples, channels)
+
+        Return
+        ------
+        :return: np.ndarray of normalized EEG data
+        :return: Int of the total amount of epochs for one experiment
+        '''
+        # ---------------------------#
+        # 1) NOTCH + BANDPASS FILTER #
+        # ---------------------------#
+        EEG_filter_ins = Filtering(fs = self.fs)
+        
+        EEG_notch = EEG_filter_ins.notch(data = raw_eeg, cutoff = 50, Q = 30)
+        EEG_bandpass, _ = EEG_filter_ins.butter_bandpass(data = EEG_notch, lowcut = lowcut, highcut = highcut, order = 4)
+
+        #===============================#
+        # 2) Calculate number of epochs #
+        #===============================#
+        trim_samples = self.fs * self.trim_period           # 375
+        samples_per_epoch = self.fs * self.trial_period
+
+        valid_samples = EEG_bandpass.shape[0] - 2 * trim_samples            # Total samples for experimental period. WHY *2 : Trim egde on both sides
+        num_epochs = int( np.round(valid_samples / samples_per_epoch) )     # Divide out total samples in sections of samples per epoch -> Results in number of epochs
+
+        trim_start = trim_samples
+        trim_end = trim_start + num_epochs * samples_per_epoch              # WHY instead of data[trim : -trim] -> Inconsistency in protocol causes the last batch of data not be included -> Rare but can happen
+
+        if (trim_end - trim_start) % samples_per_epoch != 0:                # Inform if epochs is differnet from usual amount. Can happen if bad trials is removed.
+            print(f"Warning: Samples not perfectly divisible by trial period. Calculated num epochs: {valid_samples / samples_per_epoch}")
+            print(f'Trim samples at start and end: {trim_start}, {trim_end}\n')
+            print(f"Total samples: {EEG_bandpass.shape[0]}, Valid samples: {valid_samples}, Samples per epoch: {samples_per_epoch}, Calculated num epochs: {num_epochs}")
+        
+        #=========#
+        # 3) TRIM #
+        #=========#       
+        EEG_trim = EEG_bandpass[trim_start : trim_end, :]
+        # print(f"Original shape {EEG_bandpass.shape}\n"
+        #       f'EEG_trim shape: {EEG_trim.shape}\n')
+
+        return EEG_trim, num_epochs
+    
+    def load_EEG_data(self, subject_name : str | list, finger_name : str, reject_config_dict : dict, lowcut : int, highcut : int):
+        reject_ins = RejectBadEpochs(base_dir = self.base_dir)
+        load_ins = load_datasets(base_dir = self.base_dir)
+
+        #================#
+        # Find EEG files #
+        #================#
+        EEG_files = load_ins.find_flex_files(
+            subjects = subject_name,
+            modality = "EEG",
+            fingers = finger_name,
+            prefix = 'flex'
+        )
+
+        eeg_data = []
+        epochs_overview = []
+
+        for data_file in EEG_files:
+            print(data_file)
+            raw_data_df = pd.read_csv(data_file)
+            raw_data = raw_data_df.iloc[:, 1:17].to_numpy()
+            
+            # Preprocessing
+            eeg_temp, num_epochs = self._preprocessing_routine(raw_eeg = raw_data, lowcut = lowcut, highcut = highcut)
+
+            eeg_data.append(eeg_temp)
+            epochs_overview.append(num_epochs)
+            
+        EEG = np.concatenate(eeg_data, axis = 0)
+
+        # Should be in sherpa loop 
+        reject_mask = reject_ins.reject_routine(data_file_per_finger = EEG_files,
+                                                epochs_overview = epochs_overview,
+                                                EEG_data = EEG,
+                                                RMS_data = None,
+                                                reject_config_dict = reject_config_dict,
+                                                EEG_useable_channels = None)
+
+        total_epochs = sum(epochs_overview)
+        EEG_epoch = EEG.reshape(total_epochs, EEG.shape[0] // total_epochs, EEG.shape[1])
+
+        EEG_epoch_clean = EEG_epoch[~reject_mask]
+
+        EEG_car = EEG_epoch_clean - np.mean(EEG_epoch_clean, axis = 2, keepdims = True)
+
+        filt_ins = Filtering()
+        EEG_epoch_norm = filt_ins.zscore(EEG_car, mode = 'within_ch')
+
+        return EEG_epoch_norm, epochs_overview
+
+    def plot_bandpower_heatmaps(self, data, subjects, REGIONS, BANDS, class_names):
+        """
+        Plot heatmaps (Channels x Frequency bands) for each class.
+
+        Parameters
+        ----------
+        data : list of tuples
+            [(feature_dict, label), ...]
+            feature_dict format:
+                {channel: {band: value}}
+        class_names : list
+            Mapping {label: "name"}
+        """
+
+        # data shape : (subjects, classes, regions, bands)
+
+        # -----------------------------
+        # Group data by class
+        # -----------------------------
+        all_mats = []
+
+        for subj_data in data:
+            subj_mats = []
+
+            for feat_dict in subj_data:                      # Extract PSD features (per channel x per band) for Class1 and then class2
+                
+                # Convert dict → matrix (channels × bands)
+                mat = np.zeros((len(REGIONS), len(BANDS)))
+
+                for i, ch in enumerate(REGIONS):
+                    for j, band in enumerate(BANDS):
+                        mat[i, j] = np.mean(feat_dict[ch][band])
+                
+                subj_mats.append(mat)
+            
+            all_mats.append(subj_mats)
+        
+        all_mats = np.array(all_mats)           # Shape: (Subj, class, region, band)
+        
+        S, C, R, B = all_mats.shape
+
+        #======================================#
+        # Normalize color scale across classes #
+        #======================================#
+        fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (4*S, 3*C))
+
+        # all_vals = []
+        # for mats in class_data.values():
+        #     all_vals.append(np.mean(np.array(mats), axis=0))
+
+        vmin = np.min(all_mats)
+        vmax = np.max(all_mats)
+
+        # -----------------------------
+        # Plot heatmap per class
+        # -----------------------------
+        for s in range(S):
+            for c in range(C):
+                ax = axes[c, s] if S > 1 else axes[c]
+
+                mat = all_mats[s, c]            # (R, B)
+
+                im = ax.imshow(mat, aspect='auto', vmin = vmin, vmax = vmax, cmap='viridis')
+
+                for i in range(R):          # regions (rows)
+                    for j in range(B):      # bands (cols)
+                        val = mat[i, j]
+
+                        ax.text(
+                            j, i,
+                            f"{val:.2f}",   # format (2 decimals)
+                            ha='center',
+                            va='center',
+                            color='white' if val < (vmin + vmax)/2 else 'black',
+                            fontsize=7
+                        )
+                
+                # Titles (top row)
+                if c == 0:
+                    ax.set_title(subjects[s])
+
+                # Y labels (left column)
+                if s == 0:
+                    ax.set_ylabel(class_names[c])
+
+                # Axis ticks
+                if c == C - 1:
+                    ax.set_xticks(range(B))
+                    ax.set_xticklabels(BANDS, rotation=45, ha='right', fontsize=8)
+                else:
+                    ax.set_xticks([])
+
+                if s == 0:
+                    ax.set_yticks(range(R))
+                    ax.set_yticklabels(REGIONS, fontsize=9)
+                else:
+                    ax.set_yticks([])
+                
+        # One shared colorbar
+        fig.subplots_adjust(right=0.88)  # make space on the right
+        cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        cbar = fig.colorbar(im, cax=cbar_ax)
+        cbar.set_label("PSD (µV²/Hz)", fontsize=10)
+
+        # plt.tight_layout()
+        # plt.savefig('band_power_heatmap_subjects_8-11.png', dpi = 400)
+        plt.show()
+
+    def segment_into_periods(self, epochs):
+        rest = epochs[:, : 3*self.fs, :]
+        contract = epochs[:, 3*self.fs : 6*self.fs, :]
+        release =  epochs[:, 6*self.fs : , :]
+
+        return rest, contract, release
+    
+    def compute_trialwise_region_psd(self, data_class : np.ndarray, REGIONS : Dict, FREQ_BANDS : Dict, EEG_channel_names : List, EEG_FREQ : int):
+        """
+        Compute trial-wise PSD features aggregated per region.
+
+        Parameters
+        ----------
+        data_class : np.ndarray
+            Shape (trials, samples, channels)
+
+        Returns
+        -------
+        region_features : dict
+            {region: {band: [values_per_trial]}}
+        """
+
+        region_features = {                         # Create a dict per region and its bands
+        region: {band: [] for band in FREQ_BANDS.keys()}
+        for region in REGIONS.keys()
+        }
+
+        N_trials = data_class.shape[0]
+
+        for trial in range(N_trials):
+
+            for region_name, ch_list in REGIONS.items():
+
+                trial_band_values = {band: [] for band in FREQ_BANDS.keys()}    # Dict of freq bands
+
+                for ch in ch_list:
+                    ch_idx = EEG_channel_names.index(ch)                        # Extract index where channel belong
+
+                    signal = data_class[trial, :, ch_idx]
+                    
+                    f, Pxx = welch(signal, fs = EEG_FREQ, nperseg = len(signal))
+
+                    total_power = np.trapz(Pxx, f)
+
+                    if total_power == 0:                                        # Avoid division by zero
+                        continue
+
+                    for freq_name, (low, high) in FREQ_BANDS.items():
+                        idx = (f >= low) & (f <= high)
+
+                        if np.any(idx):
+                            band_power = np.trapz(Pxx[idx], f[idx])
+                            rel_power = band_power / total_power
+                            trial_band_values[freq_name].append(rel_power)      # Contain freq bands per channel, Like {'delta': [Fp1, Fp2], 'theta': [Fp1, Fp2], ...}
+                
+                for band in FREQ_BANDS.keys():
+                    if len(trial_band_values[band]) > 0:
+
+                        region_features[region_name][band].append(np.mean(trial_band_values[band]))
+        
+        return region_features
+      
+    def cohens_d(self, x1, x2):
+        n1, s1, m1 = len(x1), np.std(x1), np.mean(x1)
+        n2, s2, m2 = len(x2), np.std(x2), np.mean(x2)
+
+        S_pool = np.sqrt( (s1**2 * (n1 - 1) + s2**2 * (n2 - 1)) / (n1 + n2 - 2) )
+        
+        if S_pool == 0:
+            return 0
+        
+        return (m1 - m2) / S_pool
+    
+    def compute_multiclass_separability(self, data_classes, REGIONS, BANDS):
+        class_pairs = [
+            (0, 1),  # left_hand vs right_hand
+            (0, 2),  # left_hand vs feet
+            (0, 3),  # left_hand vs tongue
+            (1, 2),  # right_hand vs feet
+            (1, 3),  # right_hand vs tongue
+            (2, 3)   # feet vs tongue
+        ]
+        comparison_names = [
+        "left_hand vs right_hand",
+        "left_hand vs feet",
+        "left_hand vs tongue",
+        "right_hand vs feet",
+        "right_hand vs tongue",
+        "feet vs tongue"
+        ]
+        
+        d_all_subjects = []
+        R = len(REGIONS)
+        B = len(BANDS)
+
+        for subj in data_classes:
+            print(len(subj))
+
+            d_subject = []
+
+            for c1, c2 in class_pairs:
+                d_map = np.zeros((R, B))
+
+                for i, r in enumerate(REGIONS):
+                    for j, b in enumerate(BANDS):
+                        x1 = subj[c1][r][b]            # across trials (trials, r, b)
+                        x2 = subj[c2][r][b]
+
+                        d_map[i, j] = self.cohens_d(x1, x2)
+                
+                d_subject.append(d_map)
+                
+            d_all_subjects.append(d_subject)
+        
+        d_all_subjects = np.array(d_all_subjects)                       # shape: (subjects, comparisons, regions, bands)
+
+        d_abs = np.abs(d_all_subjects)
+
+        d_mean = np.mean(d_abs, axis=0)
+        d_std  = np.std(d_abs, axis=0)
+
+        return d_mean, d_std, comparison_names
+    
+def inspect_frequency_ranges():
+    SAMPLES_PER_TRIAL = 1001
+    EEG_FREQ = 250
+    EEG_LOWCUT = 0.5
+    EEG_HIGHCUT = 60
+    REJECT_CONFIG_DICT = {
+        'EEG_epoch_rejection_tolerance' : 6,
+        'EMG_epoch_rejection_tolerance' : 6,
+        'EEG_ch_acceptance' : 0,
+        'EMG_ch_acceptance' : 0
+    }
+    train_or_test = ['train', 'test']
+
+    base_dir = Path(__file__).resolve().parents[1] / 'utilities/BCI_IV_2a'         # Path(__file__).resolve() -> Absolute path to this src folder
+    data_ins = DataAnalysis(fs = EEG_FREQ, base_dir = base_dir)
+
+    # SUBJECT_NAME = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11']
+    FREQ_BANDS = {
+    "delta": (0.5, 4),
+    "theta": (4, 8),
+    "alpha": (8, 13),
+    "beta": (13, 30),
+    "gamma": (30, 60)
+    }
+    REGIONS = {
+    "frontal": ['Fz','FC3','FC1','FCz', 'FC2', 'FC4'],
+    "central": ['C5','C3','C1','Cz','C2','C4','C6'],
+    "parietal_central": ['CP3','CP1','CPz','CP2','CP4'],
+    "parietal": ['P1','Pz','P2','POz']
+    }
+    EEG_channel_names = ['Fz','FC3','FC1','FCz', 'FC2', 'FC4', 'C5','C3','C1','Cz','C2','C4','C6','CP3','CP1','CPz','CP2','CP4', 'P1','Pz','P2','POz']
+
+    select_channels = range(0, 22)
+
+    BCI_preprocess_ins = BCI2a_preprocess(fs = EEG_FREQ,
+                                        lowcut = EEG_LOWCUT,
+                                        highcut = EEG_HIGHCUT,
+                                        reject_config_dict = REJECT_CONFIG_DICT,
+                                        samples_per_trial = SAMPLES_PER_TRIAL,
+                                        EEG_useable_channels = None)
+
+    SUBJECT_NAME = ['subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9']     
+    all_subject_data = []
+    classes = ['left_hand', 'right_hand', 'feet', 'tongue']
+
+    for subj in SUBJECT_NAME:
+        
+        # Initialize storage for this subject
+        subject_dataset = {cls: [] for cls in classes}
+
+        for tot in train_or_test:
+            train_classes = [f'left_hand_{tot}', f'right_hand_{tot}', f'feet_{tot}', f'tongue_{tot}']
+
+            for tc, dict_class in zip(train_classes, classes):
+                print('\n-----------------------------------')
+                print(f'Subject_{subj} - class : {tc}')
+                
+                dataset = base_dir / subj / (tc + '.csv')
+                data = pd.read_csv(dataset).to_numpy()              # (samples, channels)
+
+                EEG_temp = data[:, select_channels] 
+
+                #===============#
+                # Preprocessing #
+                #===============#
+                EEG_epoch_norm, _ = BCI_preprocess_ins.preprocess_BCI2a_dataset(EEG_temp)
+
+
+                subject_dataset[dict_class].append(EEG_epoch_norm)
+             
+
+        #===========================#
+        # Concatenate per class     #
+        #===========================#
+        for cls in subject_dataset:
+            subject_dataset[cls] = np.concatenate(subject_dataset[cls], axis=0)
+
+        data_classes = []                   # Container for classes with regions_features
+
+        for data_class in subject_dataset.values():
+
+            region_features = data_ins.compute_trialwise_region_psd(
+                data_class = data_class,
+                REGIONS = REGIONS,
+                FREQ_BANDS = FREQ_BANDS,
+                EEG_channel_names = EEG_channel_names,
+                EEG_FREQ = EEG_FREQ
+            )
+
+            data_classes.append(region_features)                        
+
+        # all_subjects_data =
+        # [
+        #     [dict_rest, dict_con, dict_rel],   # subject 0
+        #     [dict_rest, dict_con, dict_rel],   # subject 1
+        # ]
+        all_subject_data.append(data_classes)
+
+    all_subject_data = np.array(all_subject_data)
+    
+    data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS, class_names=classes)
+    
+    
+    d_mean, d_std, comparison_names = data_ins.compute_multiclass_separability(all_subject_data, REGIONS=REGIONS, BANDS=FREQ_BANDS)
+    
+    
+    all_mats = d_mean
+    C, R, B = all_mats.shape
+    S = 1
+    #======================================#
+    # Normalize color scale across classes #
+    #======================================#
+    fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (8*S, 3*C))        # 4*S, 3*C
+
+    vmin = np.min(all_mats)
+    vmax = np.max(all_mats)
+
+    # -----------------------------
+    # Plot heatmap per class
+    # -----------------------------
+    for s in range(S):
+        for c in range(C):
+            ax = axes[c, s] if S > 1 else axes[c]
+
+            mat = all_mats[c]            # (R, B)
+
+            im = ax.imshow(mat, aspect='auto', vmin = vmin, vmax = vmax, cmap='viridis')
+
+            for i in range(R):          # regions (rows)
+                for j in range(B):      # bands (cols)
+                    val = mat[i, j]
+
+                    ax.text(
+                        j, i,
+                        f"{val:.2f}",   # format (2 decimals)
+                        ha='center',
+                        va='center',
+                        color='white' if val < (vmin + vmax)/2 else 'black',
+                        fontsize=7
+                    )
+            
+            # Titles (top row)
+            
+            ax.set_title(comparison_names[c])
+
+            # Y labels (left column)
+            if s == 0:
+                ax.set_ylabel('Regions')
+
+            # Axis ticks
+            if c == C - 1:
+                ax.set_xticks(range(B))
+                ax.set_xticklabels(FREQ_BANDS, rotation=45, ha='right', fontsize=8)
+            else:
+                ax.set_xticks([])
+
+            if s == 0:
+                ax.set_yticks(range(R))
+                ax.set_yticklabels(REGIONS, fontsize=9)
+            else:
+                ax.set_yticks([])
+            
+    # One shared colorbar
+    fig.subplots_adjust(right=0.88)  # make space on the right
+    cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+    cbar = fig.colorbar(im, cax=cbar_ax)
+    cbar.set_label("Cohen's d", fontsize=10)
+
+    # plt.tight_layout()
+    # plt.savefig('cohen_d_across_subject_.png', dpi = 400)
+    plt.show()
+    # 0.2 = Small effect
+    # 0.5 = Moderate effect
+    # 0.8 = Large effect 
+    # for region, bands in d_mean.items():
+    #     print(f"\nRegion: {region}")
+
+    #     for band, d in bands.items():
+    #         print(f"  {band}: {d:.3f}")
+
 def load_BCI2a_dataset(subject_id):
     data_dir = Path(__file__).resolve().parents[1] / f'utilities/BCI_IV_2a/{subject_id}'         # Path(__file__).resolve() -> Absolute path to this src folder
 
     train_or_test = ['train', 'test']
     SAMPLES_PER_TRIAL = 1001
     EEG_FREQ = 250
-    EEG_LOWCUT = 6
-    EEG_HIGHCUT = 32
+    EEG_LOWCUT = 8
+    EEG_HIGHCUT = 13
     REJECT_CONFIG_DICT = {
         'EEG_epoch_rejection_tolerance' : 6,
         'EEG_ch_acceptance' : 0
@@ -606,7 +1126,7 @@ def load_BCI2a_dataset(subject_id):
                                         samples_per_trial = SAMPLES_PER_TRIAL,
                                         EEG_useable_channels = None)
     # Fz,FC3,FC1,FCz,FC2,FC4,C5,C3,C1,Cz,C2,C4,C6,CP3,CP1,CPz,CP2,CP4,P1,Pz,P2,POz,EOG1,EOG2,EOG3,stim
-    select_channels = [7, 9, 11]
+    select_channels = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     for tot in train_or_test:
         train_classes = [f'left_hand_{tot}.csv', f'right_hand_{tot}.csv', f'feet_{tot}.csv', f'tongue_{tot}.csv']
 
@@ -631,28 +1151,30 @@ def load_BCI2a_dataset(subject_id):
     
     return data_dict, reject_mask_dict, raw_data_dict, epoch_overview
 
-def load_classfication(subject_id : str | list):
+def load_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', model_name : str = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
     print(f"Using device: {device}")
     print("Pin memory set to:", pin_memory)
 
-    LOG_NAME = f'{subject_id}_CNN'
-    log_dir = Path(__file__).resolve().parent / f'loggings/BCI_IV_2a/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    LOG_NAME = f'{subject_name}'
+    log_dir = Path(__file__).resolve().parent / f'loggings/BCI_IV_2a/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
 
-    window_size = 150           # 150 - Openbci
-    step_size = 75              # 75 - Openbci
+    #==========================#
+    # NOTE: Tensorboard config #
+    #==========================#
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')                                        # Use when having tensorboard
+    os.makedirs(log_dir, exist_ok=False)    
 
     logger = ExperimentLogger(save_path = log_dir)
     split_ins = Manage2Split(seed = SEED)
     train_eval_ins = SingleNet_train_eval()
-    # feat_ins = Feature_Extraction(fs = 250, window_size = window_size, step_size = step_size)
+    model_handler_ins = SingleNetHandler(model_name = model_name, sensor_name = 'EEG')
 
     #===========#
     # Load data #
     #===========#
-    dataset, _, _, epochs_overview = load_BCI2a_dataset(subject_id = subject_id)
+    dataset, _, _, epochs_overview = load_BCI2a_dataset(subject_id = subject_name)
 
     LH_Train = dataset['left_hand_train.csv']
     RH_Train = dataset['right_hand_train.csv']
@@ -675,20 +1197,13 @@ def load_classfication(subject_id : str | list):
     X_train_val_concat, y_train_val_concat = split_ins.build_split(epoch_class1 = LH_Train, epoch_class2 = RH_Train, epoch_class3 = F_Train, epoch_class4 = T_Train)
     X_test_concat, y_test_concat = split_ins.build_split(epoch_class1 = LH_Test, epoch_class2 = RH_Test, epoch_class3 = F_Test, epoch_class4 = T_Test)
 
-    #====================#
-    # Feature Extraction #
-    #====================#
-    # X_train_val_concat, X_test_concat = feat_ins.feature_extraction_rutine(X_train_val_concat = X_train_val_concat,
-    #                                                                        X_test_concat = X_test_concat,
-    #                                                                        epoch_overview = epochs_overview)
-
     # Indicies for split of dataset
     train_rng_indices, val_rng_indices = split_ins.split_trials(num_epochs = X_train_val_concat.shape[0])
     test_rng_indices = split_ins.shuffle_BCI2a_test(num_epochs = X_test_concat.shape[0])
     
     # Create whole dataset
-    X_train_val_ins = SingleManageDataset(X_train_val_concat, y_train_val_concat)
-    X_test_ins = SingleManageDataset(X_test_concat, y_test_concat)
+    X_train_val_ins = SingleManageDataset(X_train_val_concat, y_train_val_concat, data_type='BCI_IV_2a')
+    X_test_ins = SingleManageDataset(X_test_concat, y_test_concat, data_type='BCI_IV_2a')
 
     # Shuffle dataset with random indices
     X_train = Subset(X_train_val_ins, train_rng_indices)
@@ -699,34 +1214,28 @@ def load_classfication(subject_id : str | list):
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
     MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max)      # EMG 100 - EEG 250
+    NUM_INITIAL_DATA_POINTS = 75
     DATA_CH = X_train_val_concat.shape[2]
-    NUM_CLASSES = 2
+    NUM_CLASSES = 4
     NUM_EPOCHS = 250                 # 150 - 200                    # EMG 150 - EEG 200
-    PATIENCE = 40                   # Early stopping patience - 25
-    
+    PATIENCE = 25                   # Early stopping patience - 25
+
+    #===========#
+    # Constants #
+    #===========#
+    global_best_vloss = float("inf")                # Used to only save one model.
+
     #====================================#
     # SHERPA Hyperparameter Optimazation #
     #====================================#
 
-    parameters = [sherpa.Continuous(name='learning_rate', range=[0.00001, 0.001], scale='log'),
-              sherpa.Continuous(name='dropout', range=[0.1, 0.5]),
-              sherpa.Ordinal(name='batch_size', range=[16, 32, 64]),
-              sherpa.Discrete(name='num_hidden_units', range=[32, 256]),         # before 256 (EMG -> 64)
-              sherpa.Choice(name='activation', range=['relu', 'elu']),
-              sherpa.Ordinal(name='lstm_layers', range=[1, 3]),
-              sherpa.Choice(name="optimizer", range=["adamw", "sgd_momentum"]),
-              sherpa.Continuous(name="weight_decay", range=[1e-6, 1e-2], scale="log"),
-              sherpa.Continuous(name="momentum", range=[0.7, 0.99]),   # only used for SGD
-              sherpa.Choice(name="nesterov", range=[False, True]),     # only used for SGD])
-              sherpa.Choice(name='cnn_filters', range=[16, 32, 64]),  # Only used for CNN
-              sherpa.Choice(name='kernel_size', range=[5, 15, 25]),  # Only used for CNN
-    ]
+    parameters = model_handler_ins.get_hyperparameters()
     
     # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
     algorithm = sherpa.algorithms.GPyOpt(
         max_num_trials = MAX_NUM_TRIALS,
         acquisition_type = 'EI',                     # Expected improvement
-        num_initial_data_points = 10                 # Number of hyperparameter configurations before model learns
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
     )
     # Study represents the hyperparameter optimization itself
     study = sherpa.Study(
@@ -737,27 +1246,28 @@ def load_classfication(subject_id : str | list):
     )
 
     for trial in study:
-        dropout = trial.parameters['dropout']       
-        batch_size = trial.parameters['batch_size']
-        num_hidden_units = trial.parameters['num_hidden_units']
-        activation = trial.parameters['activation'] 
-        lstm_layers = trial.parameters['lstm_layers']     # trial.parameters['lstm_layers']
-        cnn_filters = trial.parameters['cnn_filters']
-        kernel_size = trial.parameters['kernel_size']
+        model_config = model_handler_ins.build_model_config(
+            trial = trial,
+            input_dim = DATA_CH,
+            TOTAL_CLASSES = NUM_CLASSES
+        )
+        train_config = model_handler_ins.build_training_config(
+            trial = trial
+        )
 
         #=================#
         # Single datasets #
         #=================#
-        model = SingleNet_CNN(data_ch = DATA_CH, num_classes = NUM_CLASSES, dropout = dropout, activation = activation, cnn_filters = cnn_filters, kernel_size = kernel_size)
+        model = model_handler_ins.get_model(config = model_config)
         model.to(device)
         
         criterion = nn.CrossEntropyLoss()
-        optimizer = build_optimizer(model_params = model.parameters(), trial_parameters = trial.parameters)
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = train_config['lr'], weight_decay = train_config['weight_decay'])
 
         # Create data loader
-        train_loader = DataLoader(X_train, batch_size = batch_size, shuffle = True, pin_memory = pin_memory, num_workers = 0)
-        val_loader = DataLoader(X_val, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
-        test_loader = DataLoader(X_test, batch_size = batch_size, shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        train_loader = DataLoader(X_train, batch_size = train_config['batch_size'], shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(X_val, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(X_test, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
 
         best_train_loss = None
         best_val_loss = float("inf")
@@ -767,10 +1277,13 @@ def load_classfication(subject_id : str | list):
         best_state_dict = None
         early_stopping_counter = 0
 
-        # Create log folder
-        log_folder = os.path.join(log_dir, f"trial_{trial.id}")
-        os.makedirs(log_folder, exist_ok=False)
-        writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
+        #===================================#
+        # NOTE: Tensorboard config          #
+        #   Enable all if using tensorboard #
+        #===================================#
+        # log_folder = os.path.join(log_dir, f"trial_{trial.id}")               
+        # os.makedirs(log_folder, exist_ok=False)
+        # writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
 
         for epoch in range(NUM_EPOCHS):
 
@@ -781,9 +1294,9 @@ def load_classfication(subject_id : str | list):
             avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
-            writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
-            writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
-            writer.flush()
+            # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
+            # writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
+            # writer.flush()
 
             study.add_observation(trial = trial,
                                 iteration = epoch,
@@ -809,7 +1322,7 @@ def load_classfication(subject_id : str | list):
                     break
 
             print(
-                f'{subject_id} | '
+                f'{subject_name} | '
                 f'Trial {trial.id}/{MAX_NUM_TRIALS} | '
                 f'Epoch {epoch+1}/{NUM_EPOCHS} | '
                 f'Train {avg_train_loss:.4f} | '
@@ -824,22 +1337,6 @@ def load_classfication(subject_id : str | list):
 
         avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
         
-        model_arg = {
-            "data_ch": DATA_CH,
-            "hidden": num_hidden_units,
-            "lstm_layers": lstm_layers,
-            "num_classes": NUM_CLASSES,
-            "dropout": dropout,
-            "activation": activation,}
-        
-            
-        torch.save({
-            "model_state": best_state_dict,
-            "model_args": model_arg, 
-            "optimizer_state_dict": best_optimizer_dict,
-            "hyperparameters": trial.parameters,}, 
-            r'{}\model.pth'.format(log_folder))
-        
         logger.log_trial(
             trial_id=trial.id,
             hyperparams = trial.parameters,
@@ -851,16 +1348,33 @@ def load_classfication(subject_id : str | list):
             test_acc = test_acc,
             preds = predictions,
             labels = labels)
+        
+        if best_val_loss < global_best_vloss:
+            global_best_vloss = best_val_loss
 
-        writer.close()
+            torch.save({
+                "model_name": model_name,
+                "sensor_name": 'EEG',
+                "model_state": best_state_dict,
+                "model_args": model_config, 
+                "optimizer_state_dict": best_optimizer_dict,
+                "hyperparameters": trial.parameters,}, 
+                r'{}\model.pth'.format(log_dir))
+        
+        #writer.close()
         study.finalize(trial, status = 'COMPLETED')
 
 def main():
-    subject_id = 'subject_3'            # subject_1 to subject_9
+    subject_id = ['subject_1', 'subject_2']            # subject_1 to subject_9
 
-    load_classfication(subject_id = subject_id)
+    sherpa_log_folder = 'SingleNet_LSTM'
+    model_name = 'SingleNet_LSTM'
+
+    for subj in subject_id:
+        load_classfication(subject_name = subj, sherpa_log_folder = sherpa_log_folder, model_name = model_name)
     
 
 if __name__ == '__main__':
-    # main()
-    inspect_model(logging_name = 'BCI_IV_2a/subject_3_CNN')
+    main()
+    # inspect_model(logging_name = 'BCI_IV_2a/subject_3_CNN')
+    # inspect_frequency_ranges()

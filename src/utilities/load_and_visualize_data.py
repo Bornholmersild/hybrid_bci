@@ -1388,7 +1388,6 @@ class DataAnalysis():
                         region_features[region_name][band].append(np.mean(trial_band_values[band]))
         
         return region_features
-
       
     def cohens_d(self, x1, x2):
         n1, s1, m1 = len(x1), np.std(x1), np.mean(x1)
