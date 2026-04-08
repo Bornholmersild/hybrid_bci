@@ -2457,6 +2457,8 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     high_vloss = []
     high_acc = []
     subjs_nr = []
+    high_vloss_loss = []
+    high_vloss_acc = []
 
     if include_all:
         for subj_nr in range(17):
@@ -2477,12 +2479,18 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
             )
 
             high_vloss.append(best_vloss["test_accuracy"])
+            high_vloss_acc.append(best_vloss["validation_accuracy"])
+            high_vloss_loss.append(best_vloss["validation_loss"])
+
             high_acc.append(best_tacc["test_accuracy"])
             subjs_nr.append(subj_nr)
 
         print(f'Subject:        {subjs_nr}')
-        print(", ".join(f"{float(x):.2f}" for x in high_vloss))
-        print(", ".join(f"{float(x):.2f}" for x in high_acc))
+        print('TAcc - lowest Vloss',", ".join(f"{float(x):.2f}" for x in high_vloss))
+        print("VAcc - lowest Vloss",", ".join(f"{float(x):.2f}" for x in high_vloss_acc))
+        print("Vloss - lowest Vloss",", ".join(f"{float(x):.2f}" for x in high_vloss_loss))
+        print()
+        print("Acc - highest Ttest",", ".join(f"{float(x):.2f}" for x in high_acc))
         return 0
     
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
@@ -2543,6 +2551,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('         Stoped at epoch', best_value['best_epoch'])
         print('         Training loss:' , best_value['training_loss'])
         print('         validation loss', best_value['validation_loss'])
+        print('         validation acc' , best_value['validation_accuracy'])
         print('         Test accuracy: ', best_value["test_accuracy"])
         print('         Hyperparameter: ', best_value['hyperparameters'])
         print(cm)
@@ -3064,7 +3073,7 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
         Example: ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
     """
 
-    modalities = ["EEG", "EMG", "Fusion"]
+    modalities = ['EEG']#["EEG", "EMG", "Fusion"]
 
     n_subjects = len(subject_ids)
     bar_width = 0.5 / n_subjects
@@ -3128,14 +3137,14 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
 def main():
     t0 = time.time()
-    # subjects = ['subject_15', 'subject_16']     # CNN
+    subjects = ['subject_15', 'subject_16']     # CNN
     # subjects = ['subject_16']     # LSTM
     # subjects = ['subject_0', 'subject_1']     # Attention
-    subjects = ['subject_0', 'subject_1']
+    # subjects = ['subject_0', 'subject_1']
     
     sensor_name = 'EEG'
-    singleNet_save_path = 'SingleNet_CNN+LSTM+ATTENTION_EEG'
-    singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
+    singleNet_save_path = 'SingleNet_CNN+LSTM_EEG'
+    singleNet_model_name = 'SingleNet_CNN_LSTM'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'
@@ -3157,22 +3166,23 @@ def summary_accuracies():
     accuracies = {
        
     "LSTM":{
-        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],           
-        "Fusion":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58]         
+        "EEG":[30.56, 33.33, 40.74, 33.33, 29.63, 34.85, 41.33, 64.20, 33.33, 33.33, 33.33, 33.33, 33.33, 35.90, 33.33, 30.77, 39.13],      
     },
 
     "CNN+LSTM":{
-        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "Fusion":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58]
+        "EEG":[70.83, 64.29, 61.73, 33.33, 35.80, 33.33, 45.33, 77.78, 33.33, 49.38, 52.38, 50.00, 46.15, 37.18, 26.39, 37.18, 47.83],
     },
 
     "CNN+LSTM+Attention":{
-        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],             # (53.3) - higher Vloss
-        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "Fusion":[77.78, 63.10, 53.33, 50.62, 50.00, 58.67, 80.25, 44.87, 60.49, 57.14, 56.41, 50.00, 58.97, 45.83, 43.59, 50.72]
+        "EEG":[76.39, 50.00, 53.09, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],   
     }}
+
+    for key, val in accuracies.items():
+        values = val['EEG']
+        print(key)
+        print('Mean: ', np.mean(values))
+        print('STD: ', np.std(values))
+        print()
 
     architectures = ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
     _plot_subject_accuracy_hierarchical(subject_ids=subjects, accuracies=accuracies, architectures=architectures)
