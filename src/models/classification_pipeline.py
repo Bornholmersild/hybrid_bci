@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-from statsmodels.stats.contingency_tables import mcnemar
+# from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
@@ -1527,11 +1527,11 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 10             # 75 - 250 (simply to max) 
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
     NUM_INITIAL_DATA_POINTS = 75
     DATA_CH = num_channels
     NUM_CLASSES = 5 if sensor_name == 'EMG' else 3
-    NUM_EPOCHS = 10                 # 150 - 200
+    NUM_EPOCHS = 250                 # 150 - 200
     PATIENCE = 25 
     
     #===========#
@@ -2449,12 +2449,43 @@ def fusionNet_classfication_acrossSubjects(subject_name : list, sherpa_log_folde
 #================#
 # Analyse models #
 #================#
-def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
-    # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{logging_name}/SHERPA_results.pt"
+def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG', include_all = False):
 
+    #=======================#
+    # Include all in a list #
+    #=======================#
+    high_vloss = []
+    high_acc = []
+    subjs_nr = []
+
+    if include_all:
+        for subj_nr in range(17):
+            sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/subject_{subj_nr}/SHERPA_results.pt"
+
+            if not os.path.exists(sherpa_info_path):
+                continue
+
+            data = torch.load(sherpa_info_path, weights_only=False)
             
+            best_vloss = min(
+                data["trials"],
+                key=lambda x: x["validation_loss"]
+            )
+            best_tacc = max(
+                data['trials'],
+                key = lambda x: x['test_accuracy']
+            )
+
+            high_vloss.append(best_vloss["test_accuracy"])
+            high_acc.append(best_tacc["test_accuracy"])
+            subjs_nr.append(subj_nr)
+
+        print(f'Subject:        {subjs_nr}')
+        print(", ".join(f"{float(x):.2f}" for x in high_vloss))
+        print(", ".join(f"{float(x):.2f}" for x in high_acc))
+        return 0
+    
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
-    # sherpa_info_path = Path(__file__).resolve().parent / f"loggings/SHERPA_results.pt"
     if not os.path.exists(sherpa_info_path):
         raise FileExistsError(sherpa_info_path)
     data = torch.load(sherpa_info_path, weights_only=False)
@@ -3097,17 +3128,19 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
 def main():
     t0 = time.time()
-    subjects = ['subject_0']
-    # subjects = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']
+    # subjects = ['subject_15', 'subject_16']     # CNN
+    # subjects = ['subject_16']     # LSTM
+    # subjects = ['subject_0', 'subject_1']     # Attention
+    subjects = ['subject_0', 'subject_1']
     
-    sensor_name = 'EMG'
-    singleNet_save_path = 'SingleNet_CNN+LSTM+ATTENTION_EMG_TEST_LABELS'
+    sensor_name = 'EEG'
+    singleNet_save_path = 'SingleNet_CNN+LSTM+ATTENTION_EEG'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'
-
-    singleNet_classfication(subject_name = subjects, sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name)
+    for subj in subjects:
+        singleNet_classfication(subject_name = subj, sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 
@@ -3118,7 +3151,32 @@ def main():
           'Time it took: ', time.time() - t0, 's')
 
 def summary_accuracies():
-    subjects = ['Three subjects']
+    subjects = ['subject_0', 'subject_1', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']
+
+    # Subject-dependent classification only for EEG
+    accuracies = {
+       
+    "LSTM":{
+        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
+        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],           
+        "Fusion":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58]         
+    },
+
+    "CNN+LSTM":{
+        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
+        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
+        "Fusion":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58]
+    },
+
+    "CNN+LSTM+Attention":{
+        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],             # (53.3) - higher Vloss
+        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
+        "Fusion":[77.78, 63.10, 53.33, 50.62, 50.00, 58.67, 80.25, 44.87, 60.49, 57.14, 56.41, 50.00, 58.97, 45.83, 43.59, 50.72]
+    }}
+
+    architectures = ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
+    _plot_subject_accuracy_hierarchical(subject_ids=subjects, accuracies=accuracies, architectures=architectures)
+
 
     # Subjejcts 0-1 traning and subject 2 for test and validaiton
     # This is a the LOSO from smith. 
@@ -3153,25 +3211,25 @@ def summary_accuracies():
 
 
     # First subject-independent classification with LOSO for 3 subjects
-    accuracies = {
+    # accuracies = {
        
-    "LSTM":{
-        "EEG":[50.9],
-        "EMG":[56.9],           
-        "Fusion":[52.2]         
-    },
+    # "LSTM":{
+    #     "EEG":[50.9],
+    #     "EMG":[56.9],           
+    #     "Fusion":[52.2]         
+    # },
 
-    "CNN+LSTM":{
-        "EEG":[47.9],
-        "EMG":[88.6],
-        "Fusion":[85.5]
-    },
+    # "CNN+LSTM":{
+    #     "EEG":[47.9],
+    #     "EMG":[88.6],
+    #     "Fusion":[85.5]
+    # },
 
-    "CNN+LSTM+Attention":{
-        "EEG":[0, 0, 0],
-        "EMG":[0, 0, 0],
-        "Fusion":[0, 0, 0]
-    }}
+    # "CNN+LSTM+Attention":{
+    #     "EEG":[0, 0, 0],
+    #     "EMG":[0, 0, 0],
+    #     "Fusion":[0, 0, 0]
+    # }}
 
 
     # Within subject
@@ -3193,11 +3251,8 @@ def summary_accuracies():
     #     "EEG":[0, 0, 0],
     #     "EMG":[0, 0, 0],
     #     "Fusion":[0, 0, 0]
-    # }}
-
-    architectures = ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
-
-    _plot_subject_accuracy_hierarchical(subjects, accuracies, architectures)
+    # }}    
+    # _plot_subject_accuracy_hierarchical(subjects, accuracies, architectures)
 
 def compare_all_models():
 
@@ -3252,20 +3307,8 @@ if __name__ == '__main__':
 
     # inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EMG_TEST_LABELS')
 
-    # for subj in ['subject_3', 'subject_4', 'subject_5', 'subject_6']:
-    #     inspect_model(subject_name = subj, sherpa_log_folder = 'FusionNet_LSTM_fewerHyperparameters')
+    # for model in ['subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
+    #     inspect_model(subject_name = '0', sherpa_log_folder = model, include_all=True)
 
-    # summary_accuracies()
+    summary_accuracies()
 
-
-    logits = [20.5, 0.3, 0.2, 0.1, 0.05, 1.3, 0.4, 0.6]
-    logits = torch.tensor(logits)
-    logits = (logits - logits.mean()) / logits.std()
-    print(logits)
-
-    dense = DenseLayer(lstm_hidden_dim = 8, output_dim = 5, dense_ratio=1.0, activation = nn.ReLU, dropout = 0.0)
-
-    d = dense(logits)
-
-    print(d)
-    print(torch.softmax(d, dim=0))
