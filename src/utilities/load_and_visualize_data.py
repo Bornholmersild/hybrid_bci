@@ -938,23 +938,23 @@ def quick_visulize():
     load_ins = load_datasets(base_dir = base_dir)
 
     EEG_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'EEG',
-        fingers = 'thumb',
+        fingers = 'ring',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'EMG',
-        fingers = 'thumb',
+        fingers = 'ring',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
-        subjects = 'subject_16',
+        subjects = 'subject_0',
         modality = 'Markers',
-        fingers = 'thumb',
+        fingers = 'ring',
         prefix = 'flex'
     )
 
@@ -965,19 +965,19 @@ def quick_visulize():
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    SELECT_EXP_DATA = 1         # Numerical integer
+    SELECT_EXP_DATA = 0         # Numerical integer
     EEG, total_epochs_EEG = load_ins._extract_EEG_data(
-        path_to_data_files = EEG_files[SELECT_EXP_DATA],
+        path_to_data_files = EEG_files[:],
         preprocessing_func = EEG_ins.preprocessing_routine
     )
 
     RMS, EMG, epochs_overview = load_ins._extract_EMG_data(         # Without reject bad epochs
-        path_to_data_files = EMG_files[SELECT_EXP_DATA],
+        path_to_data_files = EMG_files[:],
         preprocessing_func = EMG_ins.preprocessing_routine,
         EMG_config_dict = EMG_CONFIG_DICT
     )
 
-    markers = load_ins.load_datasets_marker(marker_files)[SELECT_EXP_DATA]
+    markers = load_ins.load_datasets_marker(marker_files)
 
     total_epochs = np.sum(epochs_overview)
 
@@ -1600,12 +1600,11 @@ def inspect_frequency_ranges():
     #     for band, d in bands.items():
     #         print(f"  {band}: {d:.3f}")
         
-
 if __name__ == '__main__':
     # remove_bad_epochs()
-    # quick_visulize()
+    quick_visulize()
     # test_bad_epochs()
-    inspect_frequency_ranges()
+    #inspect_frequency_ranges()
     
 
     # base_dir = Path().resolve() / 'src/experiment/data'
