@@ -3147,6 +3147,9 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
     plt.tight_layout()
     plt.show()
 
+def repeated_measures_anova(data):
+    pass
+
 def main():
     t0 = time.time()
     # subjects = ['subject_15', 'subject_16']     # CNN
