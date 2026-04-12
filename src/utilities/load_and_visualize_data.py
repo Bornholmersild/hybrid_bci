@@ -940,21 +940,21 @@ def quick_visulize():
     EEG_files = load_ins.find_flex_files(
         subjects = 'subject_0',
         modality = 'EEG',
-        fingers = 'ring',
+        fingers = 'noise',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
         subjects = 'subject_0',
         modality = 'EMG',
-        fingers = 'ring',
+        fingers = 'noise',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
         subjects = 'subject_0',
         modality = 'Markers',
-        fingers = 'ring',
+        fingers = 'noise',
         prefix = 'flex'
     )
 
@@ -988,13 +988,13 @@ def quick_visulize():
     vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
 
-    vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = None, display_window = 0)
-    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = None, display_window = 0)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
 
 
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
-    # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+    vis_EEG_ins.plot_egg_across_channels(EEG, markers = 0, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+    vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 def test_bad_epochs():
     #-----------#
@@ -1263,6 +1263,16 @@ class DataAnalysis():
         
         S, C, R, B = all_mats.shape
 
+        mean_mat = np.mean(all_mats, axis=0)   # (C, R, B)
+        std_mat  = np.std(all_mats, axis=0)    # (C, R, B)
+
+        class_names = ['Rest', 'Contract', 'Release']
+
+        for c in range(C):
+            print(f"\nClass: {class_names[c]}")
+            print("Mean:\n", np.round(mean_mat[c], 2))
+            print("Std:\n", np.round(std_mat[c], 2))
+
         #======================================#
         # Normalize color scale across classes #
         #======================================#
@@ -1275,6 +1285,7 @@ class DataAnalysis():
 
         vmin = np.min(all_mats)
         vmax = np.max(all_mats)
+        print(f"Color scale range: vmin={vmin:.2f}, vmax={vmax:.2f}")
 
         # -----------------------------
         # Plot heatmap per class
@@ -1330,6 +1341,84 @@ class DataAnalysis():
         # plt.tight_layout()
         # plt.savefig('band_power_heatmap_subjects_8-11.png', dpi = 400)
         plt.show()
+
+    def statistics(self, data, REGIONS, BANDS):
+        import pandas as pd
+        import statsmodels.api as sm
+        from statsmodels.stats.anova import AnovaRM
+        from scipy.stats import ttest_rel
+        from statsmodels.stats.multitest import multipletests
+
+        # data shape : (subjects, classes, regions, bands)
+
+        # -----------------------------
+        # Group data by class
+        # -----------------------------
+        all_mats = []
+
+        for subj_data in data:
+            subj_mats = []
+
+            for feat_dict in subj_data:                      # Extract PSD features (per channel x per band) for Class1 and then class2
+                
+                # Convert dict → matrix (channels × bands)
+                mat = np.zeros((len(REGIONS), len(BANDS)))
+
+                for i, ch in enumerate(REGIONS):
+                    for j, band in enumerate(BANDS):
+                        mat[i, j] = np.mean(feat_dict[ch][band])
+                
+                subj_mats.append(mat)
+            
+            all_mats.append(subj_mats)
+        
+        all_mats = np.array(all_mats)           # Shape: (Subj, class, region, band)
+        
+        S, C, R, B = all_mats.shape
+
+        for r in range(R):
+            for b in range(B):
+                data = all_mats[:, :, r, b]   # (S, C)
+
+                df = pd.DataFrame({
+                    'subject': np.repeat(np.arange(S), C),
+                    'condition': np.tile(['Rest', 'Contract', 'Release'], S),
+                    'value': data.flatten()
+                })
+
+                model = AnovaRM(df, 'value', 'subject', within=['condition'])
+                res = model.fit()
+
+                p = res.anova_table['Pr > F'][0]
+
+                if p < 0.05:
+                    print(f"Significant: Region {r}, Band {b}, p={p:.4f}")
+
+        p_vals = []
+        tests = []
+        print()
+
+        for r in range(R):
+            for b in range(B):
+                data = all_mats[:, :, r, b]
+
+                rest = data[:, 0]
+                contract = data[:, 1]
+                release = data[:, 2]
+
+                p1 = ttest_rel(rest, contract).pvalue
+                p2 = ttest_rel(rest, release).pvalue
+                p3 = ttest_rel(contract, release).pvalue
+
+                p_vals.extend([p1, p2, p3])
+                tests.extend([(r,b,'R-C'), (r,b,'R-Rl'), (r,b,'C-Rl')])
+
+        # Correct for multiple comparisons
+        reject, p_corr, _, _ = multipletests(p_vals, method='fdr_bh')
+
+        for i, rej in enumerate(reject):
+            if rej:
+                print(f"Significant {tests[i]}: p={p_corr[i]:.4f}")
 
     def segment_into_periods(self, epochs):
         rest = epochs[:, : 3*self.fs, :]
@@ -1479,7 +1568,8 @@ def inspect_frequency_ranges():
     }
     NUM_CH = 16
 
-    SUBJECT_NAME = ['subject_0','subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']     
+    # SUBJECT_NAME = ['subject_0','subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']     
+    SUBJECT_NAME = ['subject_0','subject_1']
     all_subject_data = []
     for subj in SUBJECT_NAME:
         #==============#
@@ -1524,6 +1614,8 @@ def inspect_frequency_ranges():
 
     all_subject_data = np.array(all_subject_data)
     
+    data_ins.statistics(data = all_subject_data, REGIONS = REGIONS, BANDS = FREQ_BANDS)
+    exit()
     data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS)
     
     d_mean, d_std, comparison_names = data_ins.compute_multiclass_separability(all_subject_data, REGIONS=REGIONS, BANDS=FREQ_BANDS)
@@ -1607,8 +1699,8 @@ def inspect_frequency_ranges():
 if __name__ == '__main__':
     # remove_bad_epochs()
     # quick_visulize()
-    test_bad_epochs()
-    #inspect_frequency_ranges()
+    # test_bad_epochs()
+    inspect_frequency_ranges()
     
 
     # base_dir = Path().resolve() / 'src/experiment/data'
