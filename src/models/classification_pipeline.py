@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import sherpa
+from sklearn.model_selection import KFold
 
 # Manage datasets
 import numpy as np
@@ -21,7 +22,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-# from statsmodels.stats.contingency_tables import mcnemar
+from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
@@ -47,7 +48,7 @@ EEG_LOWCUT = 0.5
 EEG_HIGHCUT = 30
 
 EEG_NUM_CH = len(EEG_USEABLE_CHANNELS)
-EEG_NUM_CH = 16
+EMG_NUM_CH = 3
 
 TRIAL_PERIOD = 9
 TRIM_PERIOD = 3
@@ -988,9 +989,9 @@ class SingleManageDataset(torch.utils.data.Dataset):
         self.data = torch.tensor(data, dtype=torch.float32)
         self.labels = torch.tensor(labels, dtype=torch.long)
 
-        print('data shape:', self.data.shape)
-        print('labels shape:', self.labels.shape)
-        print()
+        # print('data shape:', self.data.shape)
+        # print('labels shape:', self.labels.shape)
+        # print()
     
     def _map_to_emg_labels(self, labels):
         '''
@@ -1238,7 +1239,189 @@ class Manage3Split:
         release  = trials[:, 6*fs:, :]
 
         return rest, contract, release
+    
+    def build_dataset_from_subjects(self, X_epoch, subjects, fs):
+        '''
+        Only used for subject-dependent classificaiton
+        '''
+        X_list = []
+        y_list = []
 
+        label_counter = 0
+        rest_list = []
+
+        for motion in X_epoch[subjects[0]].keys():
+
+            all_trials = []
+
+            # Collect trials across subjects
+            for subj in subjects:
+                all_trials.append(X_epoch[subj][motion])
+
+            all_trials = np.concatenate(all_trials, axis=0)
+
+            # Use YOUR segmentation
+            rest, contract, release = self._segment_trials(all_trials, fs)
+
+            # Contract
+            X_list.append(contract)
+            y_list.append(np.full(len(contract), label_counter))
+            label_counter += 1
+
+            # Release
+            X_list.append(release)
+            y_list.append(np.full(len(release), label_counter))
+            label_counter += 1
+
+            rest_list.append(rest)
+
+        # Shared rest
+        rest_all = np.concatenate(rest_list)
+        X_list.append(rest_all)
+        y_list.append(np.full(len(rest_all), label_counter))
+
+        X = np.concatenate(X_list)
+        y = np.concatenate(y_list)
+
+        return X, y
+
+class KFoldManageDataset(torch.utils.data.Dataset):
+    def __init__(self):
+        '''
+        Takes in the concatinated dataset of all trials, samples and channels.
+        Args:
+            X [ndArray] - with the dimension of (trials, samples, channels)
+            y [int] - Indicate the number of trials 
+        '''
+        # Convert to tensors
+        # self.data = torch.tensor(data, dtype=torch.float32)
+        # self.labels = torch.tensor(labels, dtype=torch.long)
+
+        # print('data shape:', self.data.shape)
+        # print('labels shape:', self.labels.shape)
+        # print()
+    
+    def create_kfold_splits_subject_independent(self, subject_ids, k=5):
+        '''
+        Extract indicies for train and validation sets based on subject IDs.
+        Provide K-folds of splits for subject-independent validation. Each fold contains unique subject IDs in the train and validation sets.
+        '''
+        unique_subjects = np.unique(subject_ids)
+        kf = KFold(n_splits=k, shuffle=True, random_state=42)
+
+        splits = []
+        for train_subj_idx, val_subj_idx in kf.split(unique_subjects):
+            # Get the subject IDs for the train and validation sets
+            train_subjects = unique_subjects[train_subj_idx]
+            val_subjects = unique_subjects[val_subj_idx]
+
+            # Extract the indices for the train and validation sets based on the subject IDs
+            # train_idx = np.where(np.isin(subject_ids, train_subjects))[0]
+            # val_idx   = np.where(np.isin(subject_ids, val_subjects))[0]
+            
+            # Append each split as a tuple of (train_indices, val_indices)
+            splits.append((train_subjects, val_subjects))
+
+        return splits
+    
+    def train_one_fold(self, model_handler_ins, train_eval_ins, split_ins,
+                   X_epoch, train_ids, val_ids,
+                   config, device, print_config):
+        
+        # Training set (all except test subject)
+        X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_ids, fs = config['freq'])
+        X_val, y_val = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = val_ids, fs = config['freq'])
+
+        # Build datasets
+        train_dataset = SingleManageDataset(X_train, y_train, data_type = config['sensor'])
+        val_dataset   = SingleManageDataset(X_val, y_val, data_type = config['sensor'])
+
+        train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
+        val_loader   = DataLoader(val_dataset, batch_size = config["batch_size"], shuffle=False)
+
+        model = model_handler_ins.get_model(config = config["model_config"])
+        model.to(device)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.AdamW(model.parameters(), lr = config["lr"], weight_decay = config["weight_decay"])
+
+        best_info = {}
+        best_info['val_loss'] = float("inf")
+        early_stopping_counter = 0
+
+        for epoch in range(config["epochs"]):
+
+            train_loss = train_eval_ins.train_one_epoch(model, train_loader, criterion, optimizer, device)
+            val_loss, val_acc, _ = train_eval_ins.validaton_one_epoch(model, val_loader, criterion, device)
+
+            if val_loss < best_info['val_loss']:
+                best_info['val_loss'] = val_loss
+                best_info['train_loss'] = train_loss
+                best_info['val_acc'] = val_acc
+                best_info['epoch'] = epoch
+                
+                early_stopping_counter = 0
+            else:
+                early_stopping_counter += 1
+                if early_stopping_counter >= config["patience"]:
+                    break
+            
+            print(
+                f'Fold {print_config["fold"]} | '
+                f'Trial {print_config["trial_id"]}/{print_config["max_num_trials"]} | '
+                f'Epoch {epoch+1}/{config["epochs"]} | '
+                f'Train {train_loss:.4f} | '
+                f'Val {val_loss:.4f} | '
+                f'Acc {val_acc:.2f} |',
+                f'Early stopping {early_stopping_counter} |',
+                end='\r',
+                flush=True
+            )
+
+        return best_info
+    
+    def retrain_model(self, model_handler_ins, train_eval_ins, split_ins,
+                   X_epoch, train_subjects_ids,
+                   config, mean_epochs, device, print_config):
+        
+        # Training set (all except test subject)
+        X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_subjects_ids, fs = config['freq'])
+
+        # Build datasets
+        train_dataset = SingleManageDataset(X_train, y_train, data_type = config['sensor'])
+
+        train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
+
+        # Model
+        model = model_handler_ins.get_model(config = config["model_config"])
+        model.to(device)
+        
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.AdamW(model.parameters(), lr = config["lr"], weight_decay = config["weight_decay"])
+
+        for epoch in range(mean_epochs):
+
+            train_loss = train_eval_ins.train_one_epoch(model, train_loader, criterion, optimizer, device)
+            
+            print(
+                'Retrain model | '
+                f'Trial {print_config["trial_id"]}/{print_config["max_num_trials"]} | '
+                f'Epoch {epoch+1}/{mean_epochs} | '
+                f'Train {train_loss:.4f} | '
+                'Val None | '
+                'Acc None |',
+                'Early stopping None |',
+                end='\r',
+                flush=True
+            )
+
+        return model, criterion, optimizer
+    
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.labels[idx]
 #========================#
 # Dynamic model handling #
 #========================#
@@ -1450,7 +1633,6 @@ class ExperimentLogger:
         # Save immediately (safe against crashes)
         torch.save(self.results, self.save_path)
 
-
 def check_model(model_name : str = None, sensor_name : str = None, num_motions : int = None):
     sn = str.upper(sensor_name) if sensor_name is not None else None
     mn = model_name
@@ -1467,12 +1649,12 @@ def check_model(model_name : str = None, sensor_name : str = None, num_motions :
             raise ValueError(f'model_name : {mn} not valid')
         
     if num_motions != 2 and num_motions != 7:
-        raise ValueError('Num motions : {num_motions} not valid') 
+        raise ValueError(f'Num motions : {num_motions} not valid') 
 
 #==============================#
 # Traning of model Per subject #
 #==============================#
-def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None, num_motions : int = 2):
+def singleNet_classfication_dependent(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None, num_motions : int = 2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
     print(f"Using device: {device}")
@@ -1690,7 +1872,7 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
         # writer.close()                            # NOTE: Enable with tensorboard
         study.finalize(trial, status = 'COMPLETED')
 
-def fusionNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'fusionNet_LSTM', model_name : str = 'FusionNet_LSTM'):
+def fusionNet_classfication_dependent(subject_name : str | list, sherpa_log_folder : str = 'fusionNet_LSTM', model_name : str = 'FusionNet_LSTM'):
     # When chancing between EEG and EMG
     # preprocessing instance
     # Load function
@@ -1915,7 +2097,217 @@ def fusionNet_classfication(subject_name : str | list, sherpa_log_folder : str =
 #==================================#
 # Traning of model across subjects #
 #==================================#
-def singleNet_classfication_acrossSubjects(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = 'SingleNet_LSTM'):
+
+def singleNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject_dependent/SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = 'SingleNet_LSTM', num_motions : int = 2):
+    # When chancing between EEG and EMG
+    # preprocessing instance
+    # Load function
+    check_model(model_name = model_name, sensor_name = sensor_name, num_motions = num_motions)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
+
+    LOG_NAME = 'all_subjects'
+    log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+    sensor_name = str.upper(sensor_name)
+
+    #==========================#
+    # NOTE: Tensorboard config #
+    #==========================#
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')                                        # Use when having tensorboard
+    os.makedirs(log_dir, exist_ok=False)                                                          # use without tensorboard
+
+    logger_ins = ExperimentLogger(save_path = log_dir)
+    load_ins = load_datasets(base_dir = data_dir)
+    split_ins = Manage3Split(seed = SEED)
+    train_eval_ins = SingleNet_train_eval()
+    model_handler_ins = SingleNetHandler(model_name = model_name, sensor_name = sensor_name)
+    Kfold_ins = KFoldManageDataset()
+
+    if sensor_name == 'EMG':
+        EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    elif sensor_name == 'EEG':
+        EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    else:
+        raise ValueError('data_type must be either EMG or EEG')
+
+    #====================#
+    # Load Training data #
+    #====================#
+    SUBJECT_IDs = [f'subject_{i}' for i in range(0, 17)]
+    TEST_SUBJECT = ['subject_8']    
+    X_epoch = {}
+
+    motion_list = ['pinky', 'ring', 'middle', 'index', 'thumb', 'pinchGrip', 'fullGrip'] if num_motions == 7 else ['index', 'thumb']
+    for subj in SUBJECT_IDs:
+        X_epoch[subj] = {}
+
+        for ml in motion_list:
+            if sensor_name == 'EMG':
+                X_epoch[subj][ml], _, _ = load_ins.load_EMG_data(subject_name = subj, finger_name = ml, EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+            else:
+                X_epoch[subj][ml], _ = load_ins.load_EEG_data(subject_name = subj, finger_name = ml, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    
+    # Provide a list of subjects to split between train and val. Exclude the test subject from this list.
+    train_subjects_ids = []
+    for subj in SUBJECT_IDs:
+        if subj not in TEST_SUBJECT:
+            train_subjects_ids.append(subj)
+
+    
+    FREQ = RMS_FREQ if sensor_name == 'EMG' else EEG_FREQ    
+
+    # Prepare test dataset
+    X_test, y_test = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = TEST_SUBJECT, fs = FREQ)
+    test_dataset  = SingleManageDataset(X_test, y_test, data_type = sensor_name)
+    
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 75
+    DATA_CH = EMG_NUM_CH if sensor_name == 'EMG' else EEG_NUM_CH
+    NUM_CLASSES = 5 if sensor_name == 'EMG' else 3
+    NUM_EPOCHS = 250                 # 150 - 200
+    PATIENCE = 25                   # Early stopping patience - 25
+    
+    #===========#
+    # Constants #
+    #===========#
+    global_best_vloss = float("inf")                # Used to only save one model.
+
+    #====================================#
+    # SHERPA Hyperparameter Optimazation #
+    #====================================#
+
+    parameters = model_handler_ins.get_hyperparameters()
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
+    )
+    # Study represents the hyperparameter optimization itself
+    study = sherpa.Study(
+        parameters = parameters,
+        algorithm = algorithm,
+        lower_is_better = True,
+        disable_dashboard = True
+    )
+
+    splits = Kfold_ins.create_kfold_splits_subject_independent(subject_ids = train_subjects_ids, k = 8)
+
+    for trial in study:
+        model_config = model_handler_ins.build_model_config(
+            trial = trial,
+            input_dim = DATA_CH,
+            TOTAL_CLASSES = NUM_CLASSES
+        )
+        train_config = model_handler_ins.build_training_config(
+            trial = trial
+        )
+
+        FOLD_INFO = []
+
+        config = {
+            "model_config" : model_config,
+            "lr": train_config["lr"],
+            "weight_decay": train_config["weight_decay"],
+            "batch_size": train_config["batch_size"],
+            "epochs": NUM_EPOCHS,
+            "patience": PATIENCE,
+            "sensor": sensor_name,
+            "freq" : FREQ,
+            }
+
+        for fold, (train_ids, val_ids) in enumerate(splits):
+
+            print_config = {
+                'trial_id': trial.id,
+                'max_num_trials': MAX_NUM_TRIALS,
+                'fold': fold,
+            }
+
+            best_info = Kfold_ins.train_one_fold(
+                        model_handler_ins = model_handler_ins,
+                        train_eval_ins = train_eval_ins,
+                        split_ins = split_ins,
+                        X_epoch = X_epoch,
+                        train_ids = train_ids,
+                        val_ids = val_ids,
+                        config = config, 
+                        device = device,
+                        print_config = print_config)
+
+            FOLD_INFO.append(best_info)
+        
+        fold_val_losses = [f["val_loss"] for f in FOLD_INFO]
+        fold_val_accs   = [f["val_acc"] for f in FOLD_INFO]
+        fold_train_losses = [f["train_loss"] for f in FOLD_INFO]
+        fold_epochs     = [f["epoch"] for f in FOLD_INFO]
+
+        avg_fold_vloss = np.mean(fold_val_losses)
+        avg_fold_epochs = int(np.round(np.mean(fold_epochs)))
+
+        # Load new model
+        # Train on all data
+        # Extract the model to do inference
+        retrain_model, retrain_criterion, retrain_optimizer = Kfold_ins.retrain_model(
+            model_handler_ins = model_handler_ins,
+            train_eval_ins = train_eval_ins,
+            split_ins = split_ins,
+            X_epoch = X_epoch,
+            train_subjects_ids = train_subjects_ids,
+            config = config,
+            mean_epochs = avg_fold_epochs,
+            device = device,
+            print_config = print_config
+        )
+        
+        # Prepara test dataset for inference
+        test_loader  = DataLoader(test_dataset, batch_size = config["batch_size"], shuffle=False)
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = retrain_model, test_loader = test_loader, criterion = retrain_criterion, device = device)
+
+        study.add_observation(
+            trial = trial,
+            objective = avg_fold_vloss,
+            iteration = 0
+        )
+
+        study.finalize(trial)
+
+        if avg_fold_vloss < global_best_vloss :
+            global_best_vloss = avg_fold_vloss
+            
+            torch.save({
+                "model_name": model_name,
+                "sensor_name": sensor_name,
+                "model_state": retrain_model.state_dict(),
+                "model_args": model_config, 
+                "optimizer_state_dict": retrain_optimizer.state_dict(),
+                "hyperparameters": trial.parameters,}, 
+                r'{}\model.pth'.format(log_dir))
+
+
+        logger_ins.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = fold_epochs,
+            train_loss = fold_train_losses,
+            val_loss = fold_val_losses,
+            val_acc = fold_val_accs,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+            
+        # writer.close()                            # NOTE: Enable with tensorboard
+        study.finalize(trial, status = 'COMPLETED')
+
+def singleNet_classfication_independent(subject_name : str | list, sherpa_log_folder : str = 'subject_dependent/SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = 'SingleNet_LSTM'):
     # When chancing between EEG and EMG
     # preprocessing instance
     # Load function
@@ -1925,7 +2317,7 @@ def singleNet_classfication_acrossSubjects(subject_name : str | list, sherpa_log
     print(f"Using device: {device}")
     print("Pin memory set to:", pin_memory)
 
-    LOG_NAME = 'subject_0-2'
+    LOG_NAME = 'all_subjects'
     log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
     sensor_name = str.upper(sensor_name)
@@ -2170,7 +2562,7 @@ def singleNet_classfication_acrossSubjects(subject_name : str | list, sherpa_log
         # writer.close()                            # NOTE: Enable with tensorboard
         study.finalize(trial, status = 'COMPLETED')
 
-def fusionNet_classfication_acrossSubjects(subject_name : list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', model_name : str = 'FusionNet_LSTM'):
+def fusionNet_classfication_independent(subject_name : list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', model_name : str = 'FusionNet_LSTM'):
     '''
     Train a model with EEG and EMG across subjects. 
     Subjects are clearly separated between traning, validation and test split
@@ -2473,6 +2865,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     high_vloss_acc = []
 
     if include_all:
+        cms = []
         for subj_nr in range(17):
             sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/subject_{subj_nr}/SHERPA_results.pt"
 
@@ -2490,6 +2883,10 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
                 key = lambda x: x['test_accuracy']
             )
 
+            cm = confusion_matrix(best_tacc['labels'], best_tacc['predictions'])
+            cm = cm.astype(float) / cm.sum(axis=1, keepdims=True)  # row normalize
+            cms.append(cm)
+
             high_vloss.append(best_vloss["test_accuracy"])
             high_vloss_acc.append(best_vloss["validation_accuracy"])
             high_vloss_loss.append(best_vloss["validation_loss"])
@@ -2501,8 +2898,9 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('TAcc - lowest Vloss',", ".join(f"{float(x):.2f}" for x in high_vloss))
         print("VAcc - lowest Vloss",", ".join(f"{float(x):.2f}" for x in high_vloss_acc))
         print("Vloss - lowest Vloss",", ".join(f"{float(x):.2f}" for x in high_vloss_loss))
-        print()
         print("Acc - highest Ttest",", ".join(f"{float(x):.2f}" for x in high_acc))
+        print('Confusion matrices for lowest validation loss:\n ', np.mean(cms, axis=0))
+        print()
         return 0
     
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
@@ -3101,17 +3499,17 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 
         start = pos
 
-        for mod in modalities:
-            x_positions.append(pos)
-            x_labels.append(mod)
-            pos += 1
+        # for mod in modalities:
+        x_positions.append(pos)
+        # x_labels.append(mod)
+        pos += 1
 
         end = pos - 1
         arch_centers.append((start + end) / 2)
 
-        pos += 0.5  # spacing between architectures
+        pos += 0.1  # spacing between architectures
 
-    plt.figure(figsize=(12,6))
+    plt.figure()
 
     # Plot bars per subject
     for i, subject in enumerate(subject_ids):
@@ -3121,14 +3519,14 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
         values = []
 
         for arch in architectures:
-            for mod in modalities:
-                values.append(accuracies[arch][mod][i])
+            # for mod in modalities:
+            values.append(accuracies[arch]['EEG'][i])
 
         plt.bar(
             np.array(x_positions) + offset,
             values,
             bar_width,
-            label=subject
+            label=f'Subject {i+1}'
         )
 
     plt.xticks(x_positions, x_labels)
@@ -3136,7 +3534,7 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
     plt.yticks(np.arange(0, 100.1, 10))
     plt.ylim([0, 100])
     # plt.xlabel("Model / Modality")
-    plt.legend(title="Subjects")
+    # plt.legend(title="Subjects", bbox_to_anchor=(1.05, 1), loc='upper left')        
 
     # Add architecture labels
     for center, arch in zip(arch_centers, architectures):
@@ -3145,7 +3543,8 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
     plt.grid(axis='y', linestyle='--', alpha=0.4)
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig('subject dependent accuracies without labels.png', dpi=400, bbox_inches='tight')
+    # plt.show()
 
 def main():
     t0 = time.time()
@@ -3154,14 +3553,14 @@ def main():
     # subjects = ['subject_0', 'subject_1']     # Attention
     # subjects = ['subject_0', 'subject_1']
     
-    sensor_name = 'EMG'
-    singleNet_save_path = 'subject_dependent/grip_app/SingleNet_CNN+LSTM+ATTENTION_EMG'
+    sensor_name = 'EEG'
+    singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM+ATTENTION_EEG_TESTER'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'
-    for subj in subjects:
-        singleNet_classfication(subject_name = subj, sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 7)
+    
+    singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 
@@ -3172,7 +3571,7 @@ def main():
           'Time it took: ', time.time() - t0, 's')
 
 def summary_accuracies():
-    subjects = ['subject_0', 'subject_1', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']
+    subjects = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']
 
     # Subject-dependent classification only for EEG
     accuracies = {
@@ -3186,7 +3585,7 @@ def summary_accuracies():
     },
 
     "CNN+LSTM+Attention":{
-        "EEG":[76.39, 50.00, 53.09, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],   
+        "EEG":[77.78, 63.10, 62.96, 53.33, 50.62, 50.00, 58.67, 80.25, 44.87, 60.49, 57.14, 56.41, 50.00, 58.97, 45.83, 43.59, 50.72],   
     }}
 
     for key, val in accuracies.items():
@@ -3266,15 +3665,17 @@ def mcnemar_test(y_true, pred_A, pred_B):
 if __name__ == '__main__':
     # compare_all_models()
     
-    # main()
+    main()
     
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
-    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'subject_dependent/grip_app/SingleNet_CNN+LSTM+ATTENTION_EMG', include_all=False)
-
-    # for model in ['subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    #     inspect_model(subject_name = '0', sherpa_log_folder = model, include_all=True)
+    # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
+    #     inspect_model(subject_name = 'subject_0', sherpa_log_folder = model, include_all=True)
 
     # summary_accuracies()
+    # subjects = [f'subject_{i}' for i in range(17)]
+    # kfold_ins = KFoldManageDataset(None, None)
+    # kfold_ins.create_kfold_splits_subject_independent(subject_ids=subjects, k=5)
+    # pass
 
