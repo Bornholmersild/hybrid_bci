@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-from statsmodels.stats.contingency_tables import mcnemar
+# from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
@@ -997,10 +997,16 @@ class SingleManageDataset(torch.utils.data.Dataset):
         Only applied to EEG dataset
         '''
         map_labels = labels.copy()
+        rest_label = labels.max()
 
-        map_labels[(labels == 0) | (labels == 2)] = 0
-        map_labels[(labels == 1) | (labels == 3)] = 1
-        map_labels[labels == 4] = 2
+        # Rest
+        map_labels[labels == rest_label] = 2
+
+        # Contract (even indices)
+        map_labels[(labels % 2 == 0) & (labels != rest_label)] = 0
+
+        # Release (odd indices)
+        map_labels[(labels % 2 == 1)] = 1
 
         return map_labels
     
@@ -1054,7 +1060,7 @@ class Manage3Split:
         '''
         self.rng = np.random.default_rng(seed)
     
-    def build_modality_split(self, num_index_trials : int, num_thumb_trials : int, epoch_index : np.ndarray, epoch_thumb : np.ndarray, fs : int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def build_modality_split(self, epoch_dict: dict, fs: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         '''
         Random shuffle indicies for trials and divide into train, validation and test dataset.
 
@@ -1080,39 +1086,21 @@ class Manage3Split:
         y_val : np.ndarray
         y_test : np.ndarray 
         '''
-        train_i, val_i, test_i = self._split_trials(num_index_trials)
-        train_t, val_t, test_t = self._split_trials(num_thumb_trials)
+        
+        split_indices = {}
 
-        # EEG train, validation and test datasplit
-        X_train, y_train = self._build_split(                   # Train data split
-            epoch_index = epoch_index,
-            epoch_thumb = epoch_thumb,
-            index_trials_indices = train_i,
-            thumb_trials_indices = train_t,
-            fs = fs)
-        
-        X_val, y_val = self._build_split(                       # Validation data split
-            epoch_index = epoch_index,
-            epoch_thumb = epoch_thumb,
-            index_trials_indices = val_i,
-            thumb_trials_indices = val_t,
-            fs = fs)
-        
-        X_test, y_test = self._build_split(
-            epoch_index = epoch_index,
-            epoch_thumb = epoch_thumb,
-            index_trials_indices = test_i,
-            thumb_trials_indices = test_t,
-            fs = fs)
-        
+        for motion, data in epoch_dict.items():
+            num_trials = data.shape[0]
+            split_indices[motion] = self._split_trials(num_trials, train_ratio = 0.7)
+
+        # Build datasets
+        X_train, y_train = self._build_split(epoch_dict, split_indices, split_type='train', fs=fs)
+        X_val, y_val     = self._build_split(epoch_dict, split_indices, split_type='val', fs=fs)
+        X_test, y_test   = self._build_split(epoch_dict, split_indices, split_type='test', fs=fs)
+
         return X_train, X_val, X_test, y_train, y_val, y_test
 
-    def _build_split(self, 
-                    epoch_index : np.ndarray,
-                    epoch_thumb : np.ndarray,
-                    index_trials_indices : list,
-                    thumb_trials_indices : list,
-                    fs : int) -> tuple[np.ndarray, np.ndarray]:
+    def _build_split(self, epoch_dict: dict, split_indices: dict, split_type: str, fs: int) -> tuple[np.ndarray, np.ndarray]:
         '''
         Provides a dataset and labels with 5 classes for the train-validation-test split
 
@@ -1144,31 +1132,48 @@ class Manage3Split:
         y : np.ndarray
             Corresponding labels
         '''
-        
-        # Select trials
-        index_sel = epoch_index[index_trials_indices]
-        thumb_sel = epoch_thumb[thumb_trials_indices]
 
-        # Segment
-        rest_i, contract_i, release_i = self._segment_trials(index_sel, fs)
-        rest_t, contract_t, release_t = self._segment_trials(thumb_sel, fs)
-    
-        X = np.concatenate([
-            contract_i,
-            release_i,
-            contract_t,
-            release_t,
-            np.concatenate([rest_i, rest_t])
-        ])
+        X_list = []
+        y_list = []
 
-        y = np.concatenate([
-            np.zeros(len(contract_i)),                    # 0 index_contract
-            np.ones(len(release_i)),                      # 1 index_release
-            np.full(len(contract_t), 2),                  # 2 thumb_contract
-            np.full(len(release_t), 3),                   # 3 thumb_release
-            np.full(len(rest_i)+len(rest_t), 4)           # 4 rest
-        ])
-    
+        label_counter = 0
+        rest_list = []
+
+        for motion, data in epoch_dict.items():
+            train_idx, val_idx, test_idx = split_indices[motion]
+
+            if split_type == 'train':
+                indices = train_idx
+            elif split_type == 'val':
+                indices = val_idx
+            else:
+                indices = test_idx
+
+            selected_trials = data[indices]
+
+            rest, contract, release = self._segment_trials(selected_trials, fs)
+
+            # Contract
+            X_list.append(contract)
+            y_list.append(np.full(len(contract), label_counter))
+            label_counter += 1
+
+            # Release
+            X_list.append(release)
+            y_list.append(np.full(len(release), label_counter))
+            label_counter += 1
+
+            # Collect rest (shared class later)
+            rest_list.append(rest)
+
+        # Combine rest from all motions into ONE class
+        rest_all = np.concatenate(rest_list)
+        X_list.append(rest_all)
+        y_list.append(np.full(len(rest_all), label_counter))  # last class = rest
+
+        X = np.concatenate(X_list)
+        y = np.concatenate(y_list)
+
         return X, y
 
     def _split_trials(self, num_trials : int, train_ratio : int = 0.7) -> tuple[list, list, list]:
@@ -1446,7 +1451,7 @@ class ExperimentLogger:
         torch.save(self.results, self.save_path)
 
 
-def check_model(model_name : str = None, sensor_name : str = None):
+def check_model(model_name : str = None, sensor_name : str = None, num_motions : int = None):
     sn = str.upper(sensor_name) if sensor_name is not None else None
     mn = model_name
 
@@ -1460,20 +1465,26 @@ def check_model(model_name : str = None, sensor_name : str = None):
             raise ValueError(f'sensor_name : {sn} not valid')
         elif mn != 'SingleNet_LSTM' and mn != 'SingleNet_CNN_LSTM' and mn != 'SingleNet_CNN_LSTM_ATTENTION':
             raise ValueError(f'model_name : {mn} not valid')
+        
+    if num_motions != 2 and num_motions != 7:
+        raise ValueError('Num motions : {num_motions} not valid') 
 
 #==============================#
 # Traning of model Per subject #
 #==============================#
-def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None):
+def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None, num_motions : int = 2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
     print(f"Using device: {device}")
     print("Pin memory set to:", pin_memory)
 
     LOG_NAME = f'{subject_name}'
-    log_dir = Path(__file__).resolve().parent / f'loggings/subject_dependent/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
     data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
     sensor_name = str.upper(sensor_name)
+
+    check_model(model_name = model_name, sensor_name = sensor_name, num_motions = num_motions)
+
     #==========================#
     # NOTE: Tensorboard config #
     #==========================#
@@ -1495,27 +1506,23 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
     #===========#
     # Load data #
     #===========#
-    if sensor_name == 'EMG':
-        X_epoch_index, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'index', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-        X_epoch_thumb, _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = 'thumb', EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
-    else:
-        X_epoch_index, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
-        X_epoch_thumb, _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    X_epoch = {}
+    motion_list = ['pinky', 'ring', 'middle', 'index', 'thumb', 'pinchGrip', 'fullGrip'] if num_motions == 7 else ['index', 'thumb']
 
-    num_index_trials = X_epoch_index.shape[0]
-    num_thumb_trials = X_epoch_thumb.shape[0]
+    for ml in motion_list:
+        if sensor_name == 'EMG':
+            X_epoch[ml], _, _ = load_ins.load_EMG_data(subject_name = subject_name, finger_name = ml, EMG_config_dict = EMG_CONFIG_DICT, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EMG_ins.preprocessing_routine)
+        else:
+            X_epoch[ml], _ = load_ins.load_EEG_data(subject_name = subject_name, finger_name = ml, reject_config_dict = REJECT_CONFIG_DICT, preprocessing_func = EEG_ins.preprocessing_routine, EEG_useable_channels = EEG_USEABLE_CHANNELS)
 
     FREQ = RMS_FREQ if sensor_name == 'EMG' else EEG_FREQ
 
     X_train, X_val, X_test, y_train, y_val, y_test = split_ins.build_modality_split(
-        num_index_trials = num_index_trials,
-        num_thumb_trials = num_thumb_trials,
-        epoch_index = X_epoch_index,
-        epoch_thumb = X_epoch_thumb,
+        epoch_dict = X_epoch,
         fs = FREQ
     )
     
-    _, num_samples, num_channels = X_train.shape
+    _, _, num_channels = X_train.shape
 
     #=================#
     # Single datasets #
@@ -1535,7 +1542,7 @@ def singleNet_classfication(subject_name : str | list, sherpa_log_folder : str =
     MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
     NUM_INITIAL_DATA_POINTS = 75
     DATA_CH = num_channels
-    NUM_CLASSES = 5 if sensor_name == 'EMG' else 3
+    NUM_CLASSES = (2 * num_motions + 1) if sensor_name == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
     PATIENCE = 25 
     
@@ -2462,6 +2469,8 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     high_vloss = []
     high_acc = []
     subjs_nr = []
+    high_vloss_loss = []
+    high_vloss_acc = []
 
     if include_all:
         for subj_nr in range(17):
@@ -2482,12 +2491,18 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
             )
 
             high_vloss.append(best_vloss["test_accuracy"])
+            high_vloss_acc.append(best_vloss["validation_accuracy"])
+            high_vloss_loss.append(best_vloss["validation_loss"])
+
             high_acc.append(best_tacc["test_accuracy"])
             subjs_nr.append(subj_nr)
 
         print(f'Subject:        {subjs_nr}')
-        print(", ".join(f"{float(x):.2f}" for x in high_vloss))
-        print(", ".join(f"{float(x):.2f}" for x in high_acc))
+        print('TAcc - lowest Vloss',", ".join(f"{float(x):.2f}" for x in high_vloss))
+        print("VAcc - lowest Vloss",", ".join(f"{float(x):.2f}" for x in high_vloss_acc))
+        print("Vloss - lowest Vloss",", ".join(f"{float(x):.2f}" for x in high_vloss_loss))
+        print()
+        print("Acc - highest Ttest",", ".join(f"{float(x):.2f}" for x in high_acc))
         return 0
     
     sherpa_info_path = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}/SHERPA_results.pt"
@@ -2548,6 +2563,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('         Stoped at epoch', best_value['best_epoch'])
         print('         Training loss:' , best_value['training_loss'])
         print('         validation loss', best_value['validation_loss'])
+        print('         validation acc' , best_value['validation_accuracy'])
         print('         Test accuracy: ', best_value["test_accuracy"])
         print('         Hyperparameter: ', best_value['hyperparameters'])
         print(cm)
@@ -3069,7 +3085,7 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
         Example: ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
     """
 
-    modalities = ["EEG", "EMG", "Fusion"]
+    modalities = ['EEG']#["EEG", "EMG", "Fusion"]
 
     n_subjects = len(subject_ids)
     bar_width = 0.5 / n_subjects
@@ -3134,18 +3150,18 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 def main():
     t0 = time.time()
     # subjects = ['subject_15', 'subject_16']     # CNN
-    # subjects = ['subject_16']     # LSTM
+    subjects = ['subject_0']     # LSTM
     # subjects = ['subject_0', 'subject_1']     # Attention
-    subjects = ['subject_0', 'subject_1']
+    # subjects = ['subject_0', 'subject_1']
     
-    sensor_name = 'EEG'
-    singleNet_save_path = 'SingleNet_CNN+LSTM+ATTENTION_EEG'
+    sensor_name = 'EMG'
+    singleNet_save_path = 'subject_dependent/grip_app/SingleNet_CNN+LSTM+ATTENTION_EMG'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'
     for subj in subjects:
-        singleNet_classfication(subject_name = subj, sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name)
+        singleNet_classfication(subject_name = subj, sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 7)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 
@@ -3162,22 +3178,23 @@ def summary_accuracies():
     accuracies = {
        
     "LSTM":{
-        "EEG":[],
-        "EMG":[],
-        "Fusion":[]
+        "EEG":[30.56, 33.33, 40.74, 33.33, 29.63, 34.85, 41.33, 64.20, 33.33, 33.33, 33.33, 33.33, 33.33, 35.90, 33.33, 30.77, 39.13],      
     },
 
     "CNN+LSTM":{
-        "EEG":[],
-        "EMG":[],
-        "Fusion":[]
+        "EEG":[70.83, 64.29, 61.73, 33.33, 35.80, 33.33, 45.33, 77.78, 33.33, 49.38, 52.38, 50.00, 46.15, 37.18, 26.39, 37.18, 47.83],
     },
 
     "CNN+LSTM+Attention":{
-        "EEG":[],
-        "EMG":[],
-        "Fusion":[]
+        "EEG":[76.39, 50.00, 53.09, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],   
     }}
+
+    for key, val in accuracies.items():
+        values = val['EEG']
+        print(key)
+        print('Mean: ', np.mean(values))
+        print('STD: ', np.std(values))
+        print()
 
     architectures = ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
     _plot_subject_accuracy_hierarchical(subject_ids=subjects, accuracies=accuracies, architectures=architectures)
@@ -3254,10 +3271,10 @@ if __name__ == '__main__':
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
-    # inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EMG_TEST_LABELS')
+    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'subject_dependent/grip_app/SingleNet_CNN+LSTM+ATTENTION_EMG', include_all=False)
 
     # for model in ['subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
     #     inspect_model(subject_name = '0', sherpa_log_folder = model, include_all=True)
 
-    summary_accuracies()
+    # summary_accuracies()
 

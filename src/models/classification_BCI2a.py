@@ -26,10 +26,10 @@ from sklearn.preprocessing import StandardScaler
 import antropy as ant
 
 # Own implementations
-from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
+from src.utilities.preprocessing import RejectBadEpochs, Filtering #E402
 from src.utilities.trainer_and_evaluator import SingleNet_train_eval
 from src.utilities.load_and_visualize_data import load_datasets, visualize_EEG
-from src.models.classification_pipeline import ExperimentLogger, SingleManageDataset, SingleNetHandler #SingleNet, SingleNet_CNN, SingleManageDataset, ExperimentLogger, SingleManageDataset, build_optimizer, inspect_model
+from src.models.classification_pipeline import ExperimentLogger, SingleManageDataset, SingleNetHandler
 
 # Avoid messages for sherpa
 logging.getLogger("GP").setLevel(logging.CRITICAL)
@@ -1365,10 +1365,10 @@ def load_classfication(subject_name : str | list, sherpa_log_folder : str = 'Sin
         study.finalize(trial, status = 'COMPLETED')
 
 def main():
-    subject_id = ['subject_1', 'subject_2']            # subject_1 to subject_9
+    subject_id = ['subject_2']            # subject_1 to subject_9
 
-    sherpa_log_folder = 'SingleNet_LSTM'
-    model_name = 'SingleNet_LSTM'
+    sherpa_log_folder = 'SingleNet_CNN+LSTM/one_maxpool'
+    model_name = 'SingleNet_CNN_LSTM'
 
     for subj in subject_id:
         load_classfication(subject_name = subj, sherpa_log_folder = sherpa_log_folder, model_name = model_name)
