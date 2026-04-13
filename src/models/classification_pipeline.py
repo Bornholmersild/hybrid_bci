@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
 import sherpa
 from sklearn.model_selection import KFold
 
@@ -12,7 +12,7 @@ import numpy as np
 # Manage utils
 import os 
 from pathlib import Path
-from datetime import datetime
+#from datetime import datetime
 import logging                  # Avoid loggings from GP
 from copy import deepcopy       # Used for copy model_state
 import time
@@ -25,7 +25,7 @@ from sklearn.metrics import silhouette_score
 from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
-from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, RejectBadEpochs, Filtering #E402
+from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing #, RejectBadEpochs, Filtering #E402
 from src.utilities.trainer_and_evaluator import FusionNet_train_eval, SingleNet_train_eval
 from src.utilities.load_and_visualize_data import load_datasets
 
@@ -3037,9 +3037,6 @@ def singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
 
     FREQ = RMS_FREQ
 
-    num_index_trials = X_epoch_index.shape[0]
-    num_thumb_trials = X_epoch_thumb.shape[0]
-
     X, y = split_ins._build_split(epoch_index = X_epoch_index,
                            epoch_thumb = X_epoch_thumb,
                            index_trials_indices = slice(None),
@@ -3483,7 +3480,7 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
         Example: ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
     """
 
-    modalities = ['EEG']#["EEG", "EMG", "Fusion"]
+    #modalities = ['EEG']#["EEG", "EMG", "Fusion"]
 
     n_subjects = len(subject_ids)
     bar_width = 0.5 / n_subjects
@@ -3549,7 +3546,7 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
 def main():
     t0 = time.time()
     # subjects = ['subject_15', 'subject_16']     # CNN
-    subjects = ['subject_0']     # LSTM
+    #subjects = ['subject_0']     # LSTM
     # subjects = ['subject_0', 'subject_1']     # Attention
     # subjects = ['subject_0', 'subject_1']
     
@@ -3557,8 +3554,8 @@ def main():
     singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM+ATTENTION_EEG_TESTER'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
-    fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'
-    fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'
+    fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
+    fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'   # noqa: F841
     
     singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
