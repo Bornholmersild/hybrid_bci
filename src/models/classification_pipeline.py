@@ -3131,9 +3131,6 @@ def _plot_subject_accuracy_hierarchical(subject_ids, accuracies, architectures):
     plt.tight_layout()
     plt.show()
 
-def repeated_measures_anova(data):
-    pass
-
 def main():
     t0 = time.time()
     # subjects = ['subject_15', 'subject_16']     # CNN
@@ -3165,36 +3162,25 @@ def summary_accuracies():
     accuracies = {
        
     "LSTM":{
-        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],           
-        "Fusion":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58]         
+        "EEG":[],
+        "EMG":[],
+        "Fusion":[]
     },
 
     "CNN+LSTM":{
-        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "Fusion":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58]
+        "EEG":[],
+        "EMG":[],
+        "Fusion":[]
     },
 
     "CNN+LSTM+Attention":{
-        "EEG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],             # (53.3) - higher Vloss
-        "EMG":[76.39, 50.00, 38.67, 37.04, 41.03, 58.67, 74.07, 35.90, 43.21, 44.05, 37.18, 46.15, 43.59, 36.11, 39.74, 40.58],
-        "Fusion":[77.78, 63.10, 53.33, 50.62, 50.00, 58.67, 80.25, 44.87, 60.49, 57.14, 56.41, 50.00, 58.97, 45.83, 43.59, 50.72]
+        "EEG":[],
+        "EMG":[],
+        "Fusion":[]
     }}
 
     architectures = ['LSTM','CNN+LSTM','CNN+LSTM+Attention']
     _plot_subject_accuracy_hierarchical(subject_ids=subjects, accuracies=accuracies, architectures=architectures)
-
-
-    # Subjejcts 0-1 traning and subject 2 for test and validaiton
-    # This is a the LOSO from smith. 
-    #LSTM_fusion : 52.2 acc, 1.97 loss          
-    #LSTM_EMG : 56.86, 1.28 loss
-    #LSTM_EEG : 50.93 acc, 0.84 loss            (34.5, 1.06) 0.5-30Hz random search
-
-    #CNN+LSTM_fusion : 85.54 acc, 1.2 loss      (72.5-88.7, 1.23-1.62) 0.5-30Hz random search
-    #CNN+LSTM_EMG : 88.62, 0.54 loss            (91.76, 0.34)     0.5-30Hz random search
-    #CNN+LSTM_EEG : 47.9, 0.92 loss             (59.6, 0.94) 0.5-30 Hz
 
     # Subject-independent classification with LOSO for all subjects
     # accuracies = {
@@ -3216,51 +3202,6 @@ def summary_accuracies():
     #     "EMG":[99.4],
     #     "Fusion":[99.5]
     # }}
-
-
-    # First subject-independent classification with LOSO for 3 subjects
-    # accuracies = {
-       
-    # "LSTM":{
-    #     "EEG":[50.9],
-    #     "EMG":[56.9],           
-    #     "Fusion":[52.2]         
-    # },
-
-    # "CNN+LSTM":{
-    #     "EEG":[47.9],
-    #     "EMG":[88.6],
-    #     "Fusion":[85.5]
-    # },
-
-    # "CNN+LSTM+Attention":{
-    #     "EEG":[0, 0, 0],
-    #     "EMG":[0, 0, 0],
-    #     "Fusion":[0, 0, 0]
-    # }}
-
-
-    # Within subject
-    # accuracies = {
-    #    
-    # "LSTM":{
-    #     "EEG":[59.3, 41.7, 58.3],
-    #     "EMG":[92.6, 82.7, 96.3],           # subj3 : 83.3 , subj4 : 93.6 , subj5 : 97.5
-    #     "Fusion":[92.3, 80.2, 96.0]         # subj3 : 91.7 , subj4 : 79.5 , subj5 : 85.2 , subj6 : 59.7]
-    # },
-
-    # "CNN+LSTM":{
-    #     "EEG":[75.3, 66.7, 75.0],
-    #     "EMG":[100, 95, 100],
-    #     "Fusion":[100, 96.3, 100]
-    # },
-
-    # "CNN+LSTM+Attention":{
-    #     "EEG":[0, 0, 0],
-    #     "EMG":[0, 0, 0],
-    #     "Fusion":[0, 0, 0]
-    # }}    
-    # _plot_subject_accuracy_hierarchical(subjects, accuracies, architectures)
 
 def compare_all_models():
 

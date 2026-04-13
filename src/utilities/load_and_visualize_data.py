@@ -1510,7 +1510,6 @@ class DataAnalysis():
         B = len(BANDS)
 
         for subj in data_classes:
-            print(len(subj))
 
             d_subject = []
 
@@ -1537,170 +1536,172 @@ class DataAnalysis():
 
         return d_mean, d_std, comparison_names
     
-def inspect_frequency_ranges():
-    EEG_FREQ = 125
-    EEG_LOWCUT = 0.5
-    EEG_HIGHCUT = 60
-    REJECT_CONFIG_DICT = {
-        'EEG_epoch_rejection_tolerance' : 6,
-        'EMG_epoch_rejection_tolerance' : 6,
-        'EEG_ch_acceptance' : 0,
-        'EMG_ch_acceptance' : 0
-    }
+    def inspect_frequency_ranges(self, subjects : list):
+        EEG_FREQ = 125
+        EEG_LOWCUT = 0.5
+        EEG_HIGHCUT = 60
+        REJECT_CONFIG_DICT = {
+            'EEG_epoch_rejection_tolerance' : 6,
+            'EMG_epoch_rejection_tolerance' : 6,
+            'EEG_ch_acceptance' : 0,
+            'EMG_ch_acceptance' : 0
+        }
 
-    base_dir = Path().resolve() / 'src/experiment/data'
-    data_ins = DataAnalysis(fs = EEG_FREQ, base_dir = base_dir)
+        # SUBJECT_NAME = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11']
+        FREQ_BANDS = {
+        "delta": (0.5, 4),
+        "theta": (4, 8),
+        "alpha": (8, 13),
+        "beta": (13, 30),
+        "gamma": (30, 60)
+        }
+        REGIONS = {
+        "prefrontal": ['Fp1', 'Fp2'],
+        "frontal": ['F3', 'F4', 'F7', 'F8', 'Fz'],
+        "central": ['C3', 'C4', 'Cz'],
+        "temporal": ['T3', 'T4', 'T5', 'T6'],
+        "parietal": ['P3', 'P4']
+        }
+        NUM_CH = 16
 
-    # SUBJECT_NAME = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11']
-    FREQ_BANDS = {
-    "delta": (0.5, 4),
-    "theta": (4, 8),
-    "alpha": (8, 13),
-    "beta": (13, 30),
-    "gamma": (30, 60)
-    }
-    REGIONS = {
-    "prefrontal": ['Fp1', 'Fp2'],
-    "frontal": ['F3', 'F4', 'F7', 'F8', 'Fz'],
-    "central": ['C3', 'C4', 'Cz'],
-    "temporal": ['T3', 'T4', 'T5', 'T6'],
-    "parietal": ['P3', 'P4']
-    }
-    NUM_CH = 16
+        # SUBJECT_NAME = ['subject_0','subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']     
+        SUBJECT_NAME = subjects
+        all_subject_data = []
+        for subj in SUBJECT_NAME:
+            #==============#
+            # Load dataset #
+            #==============#
+            X_epoch_index, _ = self.load_EEG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, lowcut = EEG_LOWCUT, highcut = EEG_HIGHCUT)
+            X_epoch_thumb, _ = self.load_EEG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, lowcut = EEG_LOWCUT, highcut = EEG_HIGHCUT)
 
-    # SUBJECT_NAME = ['subject_0','subject_1', 'subject_2', 'subject_3', 'subject_4', 'subject_5', 'subject_6', 'subject_7', 'subject_8', 'subject_9', 'subject_10', 'subject_11', 'subject_12', 'subject_13', 'subject_14', 'subject_15', 'subject_16']     
-    SUBJECT_NAME = ['subject_0','subject_1']
-    all_subject_data = []
-    for subj in SUBJECT_NAME:
-        #==============#
-        # Load dataset #
-        #==============#
-        X_epoch_index, _ = data_ins.load_EEG_data(subject_name = subj, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, lowcut = EEG_LOWCUT, highcut = EEG_HIGHCUT)
-        X_epoch_thumb, _ = data_ins.load_EEG_data(subject_name = subj, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, lowcut = EEG_LOWCUT, highcut = EEG_HIGHCUT)
+            #===========================#
+            # Extract onset period      #
+            # Reshape to continous data #
+            #===========================#
+            X1_rest, X1_con, X1_rel = self.segment_into_periods(epochs = X_epoch_index)     # shape: (E, S, C) -> (E*S, C)
+            X2_rest, X2_con, X2_rel = self.segment_into_periods(epochs = X_epoch_thumb)
 
-        #===========================#
-        # Extract onset period      #
-        # Reshape to continous data #
-        #===========================#
-        X1_rest, X1_con, X1_rel = data_ins.segment_into_periods(epochs = X_epoch_index)     # shape: (E, S, C) -> (E*S, C)
-        X2_rest, X2_con, X2_rel = data_ins.segment_into_periods(epochs = X_epoch_thumb)
+            X_rest = np.concatenate((X1_rest, X2_rest), axis=0)
+            X_con = np.concatenate((X1_con, X2_con), axis=0)
+            X_rel = np.concatenate((X1_rel, X2_rel), axis=0)
 
-        X_rest = np.concatenate((X1_rest, X2_rest), axis=0)
-        X_con = np.concatenate((X1_con, X2_con), axis=0)
-        X_rel = np.concatenate((X1_rel, X2_rel), axis=0)
+            LABELS = ['rest', 'contract', 'release']
+            
+            data_classes = []                   # Container for classes with regions_features
 
-        LABELS = ['rest', 'contract', 'release']
+            for data_class in [X_rest, X_con, X_rel]: 
+
+                region_features = self.compute_trialwise_region_psd(
+                    data_class = data_class,
+                    REGIONS = REGIONS,
+                    FREQ_BANDS = FREQ_BANDS,
+                    EEG_channel_names = EEG_channel_names,
+                    EEG_FREQ = EEG_FREQ
+                )
+
+                data_classes.append(region_features)                        
+
+            # all_subjects_data =
+            # [
+            #     [dict_rest, dict_con, dict_rel],   # subject 0
+            #     [dict_rest, dict_con, dict_rel],   # subject 1
+            # ]
+            all_subject_data.append(data_classes)
+
+        all_subject_data = np.array(all_subject_data)
         
-        data_classes = []                   # Container for classes with regions_features
+        return all_subject_data
+        '''
+        data_ins.statistics(data = all_subject_data, REGIONS = REGIONS, BANDS = FREQ_BANDS)
+        
+        data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS)
+        
+        d_mean, d_std, comparison_names = data_ins.compute_multiclass_separability(all_subject_data, REGIONS=REGIONS, BANDS=FREQ_BANDS)
+        
+        
+        all_mats = d_mean
+        C, R, B = all_mats.shape
+        S = 1
+        #======================================#
+        # Normalize color scale across classes #
+        #======================================#
+        fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (8*S, 3*C))        # 4*S, 3*C
+        class_names = ['Rest', 'Contract', 'Release']
 
-        for data_class in [X_rest, X_con, X_rel]: 
+        vmin = np.min(all_mats)
+        vmax = np.max(all_mats)
 
-            region_features = data_ins.compute_trialwise_region_psd(
-                data_class = data_class,
-                REGIONS = REGIONS,
-                FREQ_BANDS = FREQ_BANDS,
-                EEG_channel_names = EEG_channel_names,
-                EEG_FREQ = EEG_FREQ
-            )
+        # -----------------------------
+        # Plot heatmap per class
+        # -----------------------------
+        for s in range(S):
+            for c in range(C):
+                ax = axes[c, s] if S > 1 else axes[c]
 
-            data_classes.append(region_features)                        
+                mat = all_mats[c]            # (R, B)
 
-        # all_subjects_data =
-        # [
-        #     [dict_rest, dict_con, dict_rel],   # subject 0
-        #     [dict_rest, dict_con, dict_rel],   # subject 1
-        # ]
-        all_subject_data.append(data_classes)
+                im = ax.imshow(mat, aspect='auto', vmin = vmin, vmax = vmax, cmap='viridis')
 
-    all_subject_data = np.array(all_subject_data)
-    
-    data_ins.statistics(data = all_subject_data, REGIONS = REGIONS, BANDS = FREQ_BANDS)
-    exit()
-    data_ins.plot_bandpower_heatmaps(data = all_subject_data, subjects=SUBJECT_NAME, REGIONS = REGIONS, BANDS = FREQ_BANDS)
-    
-    d_mean, d_std, comparison_names = data_ins.compute_multiclass_separability(all_subject_data, REGIONS=REGIONS, BANDS=FREQ_BANDS)
-    
-    
-    all_mats = d_mean
-    C, R, B = all_mats.shape
-    S = 1
-    #======================================#
-    # Normalize color scale across classes #
-    #======================================#
-    fig, axes = plt.subplots(nrows = C, ncols = S, figsize = (8*S, 3*C))        # 4*S, 3*C
-    class_names = ['Rest', 'Contract', 'Release']
+                for i in range(R):          # regions (rows)
+                    for j in range(B):      # bands (cols)
+                        val = mat[i, j]
 
-    vmin = np.min(all_mats)
-    vmax = np.max(all_mats)
+                        ax.text(
+                            j, i,
+                            f"{val:.2f}",   # format (2 decimals)
+                            ha='center',
+                            va='center',
+                            color='white' if val < (vmin + vmax)/2 else 'black',
+                            fontsize=7
+                        )
+                
+                # Titles (top row)
+                
+                ax.set_title(comparison_names[c])
 
-    # -----------------------------
-    # Plot heatmap per class
-    # -----------------------------
-    for s in range(S):
-        for c in range(C):
-            ax = axes[c, s] if S > 1 else axes[c]
+                # Y labels (left column)
+                if s == 0:
+                    ax.set_ylabel('Regions')
 
-            mat = all_mats[c]            # (R, B)
+                # Axis ticks
+                if c == C - 1:
+                    ax.set_xticks(range(B))
+                    ax.set_xticklabels(FREQ_BANDS, rotation=45, ha='right', fontsize=8)
+                else:
+                    ax.set_xticks([])
 
-            im = ax.imshow(mat, aspect='auto', vmin = vmin, vmax = vmax, cmap='viridis')
+                if s == 0:
+                    ax.set_yticks(range(R))
+                    ax.set_yticklabels(REGIONS, fontsize=9)
+                else:
+                    ax.set_yticks([])
+                
+        # One shared colorbar
+        fig.subplots_adjust(right=0.88)  # make space on the right
+        cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        cbar = fig.colorbar(im, cax=cbar_ax)
+        cbar.set_label("Cohen's d", fontsize=10)
 
-            for i in range(R):          # regions (rows)
-                for j in range(B):      # bands (cols)
-                    val = mat[i, j]
+        # plt.tight_layout()
+        # plt.savefig('cohen_d_across_subject_.png', dpi = 400)
+        plt.show()
+        # 0.2 = Small effect
+        # 0.5 = Moderate effect
+        # 0.8 = Large effect 
+        # for region, bands in d_mean.items():
+        #     print(f"\nRegion: {region}")
 
-                    ax.text(
-                        j, i,
-                        f"{val:.2f}",   # format (2 decimals)
-                        ha='center',
-                        va='center',
-                        color='white' if val < (vmin + vmax)/2 else 'black',
-                        fontsize=7
-                    )
-            
-            # Titles (top row)
-            
-            ax.set_title(comparison_names[c])
-
-            # Y labels (left column)
-            if s == 0:
-                ax.set_ylabel('Regions')
-
-            # Axis ticks
-            if c == C - 1:
-                ax.set_xticks(range(B))
-                ax.set_xticklabels(FREQ_BANDS, rotation=45, ha='right', fontsize=8)
-            else:
-                ax.set_xticks([])
-
-            if s == 0:
-                ax.set_yticks(range(R))
-                ax.set_yticklabels(REGIONS, fontsize=9)
-            else:
-                ax.set_yticks([])
-            
-    # One shared colorbar
-    fig.subplots_adjust(right=0.88)  # make space on the right
-    cbar_ax = fig.add_axes([0.90, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
-    cbar = fig.colorbar(im, cax=cbar_ax)
-    cbar.set_label("Cohen's d", fontsize=10)
-
-    # plt.tight_layout()
-    # plt.savefig('cohen_d_across_subject_.png', dpi = 400)
-    plt.show()
-    # 0.2 = Small effect
-    # 0.5 = Moderate effect
-    # 0.8 = Large effect 
-    # for region, bands in d_mean.items():
-    #     print(f"\nRegion: {region}")
-
-    #     for band, d in bands.items():
-    #         print(f"  {band}: {d:.3f}")
+        #     for band, d in bands.items():
+        #         print(f"  {band}: {d:.3f}")'''
         
 if __name__ == '__main__':
     # remove_bad_epochs()
     # quick_visulize()
     # test_bad_epochs()
-    inspect_frequency_ranges()
+
+    subjects = ['subject_0', 'subject_1']
+    Da_ins = DataAnalysis()
+    Da_ins.inspect_frequency_ranges(subjects = subjects)
     
 
     # base_dir = Path().resolve() / 'src/experiment/data'
