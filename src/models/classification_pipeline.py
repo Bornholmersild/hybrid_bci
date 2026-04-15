@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-from statsmodels.stats.contingency_tables import mcnemar
+# from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing #, RejectBadEpochs, Filtering #E402
@@ -2930,19 +2930,19 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         if rank > 10:
             break'''
     
-    # print('Last ten')
-    # data_len = len(data['trials'])
-    # for idx in range(data_len - 50, data_len):
-    #     trial = data['trials'][idx]
+    print('Last ten')
+    data_len = len(data['trials'])
+    for idx in range(data_len - 50, data_len):
+        trial = data['trials'][idx]
 
-    #     # print('Rank:', rank + 1)
-    #     print('Trial:', idx + 1)
-    #     print('Epochs', trial['best_epoch'])
-    #     print('Training loss:' , trial['training_loss'])
-    #     print('Validation loss:', trial['validation_loss'])
-    #     print('Validation accuracy:', trial['validation_accuracy'])
-    #     print('Test accuracy:', trial['test_accuracy'])
-    #     print('Hyperparameters:\n', trial['hyperparameters'], '\n')
+        # print('Rank:', rank + 1)
+        print('Trial:', idx + 1)
+        print('Epochs', trial['best_epoch'])
+        print('Training loss:' , trial['training_loss'])
+        print('Validation loss:', trial['validation_loss'])
+        print('Validation accuracy:', trial['validation_accuracy'])
+        print('Test accuracy:', trial['test_accuracy'])
+        print('Hyperparameters:\n', trial['hyperparameters'], '\n')
 
     best_vloss = min(
         data["trials"],
@@ -3551,7 +3551,7 @@ def main():
     # subjects = ['subject_0', 'subject_1']
     
     sensor_name = 'EEG'
-    singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM+ATTENTION_EEG_TESTER'
+    singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM+ATTENTION_EEG'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
@@ -3662,13 +3662,13 @@ def mcnemar_test(y_true, pred_A, pred_B):
 if __name__ == '__main__':
     # compare_all_models()
     
-    main()
+    # main()
     
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    #     inspect_model(subject_name = 'subject_0', sherpa_log_folder = model, include_all=True)
+    inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/SingleNet_CNN+LSTM+ATTENTION_EEG', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]
