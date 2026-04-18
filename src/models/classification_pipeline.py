@@ -24,7 +24,7 @@ from typing import Dict, List
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-from statsmodels.stats.contingency_tables import mcnemar
+# from statsmodels.stats.contingency_tables import mcnemar
 
 # Own implementations
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing #, RejectBadEpochs, Filtering #E402
@@ -2492,8 +2492,8 @@ def singleNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
-    NUM_INITIAL_DATA_POINTS = 75
+    MAX_NUM_TRIALS = 75             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 35
     DATA_CH = EMG_NUM_CH if sensor_name == 'EMG' else EEG_NUM_CH
     NUM_CLASSES = 5 if sensor_name == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
@@ -3981,20 +3981,21 @@ def mcnemar_test(y_true, pred_A, pred_B):
     table = [[n11, n10],
              [n01, n00]]
 
-    result = mcnemar(table, exact=False, correction=True)
+    # result = mcnemar(table, exact=False, correction=True)
+    result = None
 
     return result.statistic, result.pvalue
 
 if __name__ == '__main__':
     # compare_all_models()
     
-    main()
+    # main()
     
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    #     inspect_model(subject_name = 'subject_0', sherpa_log_folder = model, include_all=True)
+    inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/SingleNet_CNN_LSTM_ATTENTION_EEG', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]
