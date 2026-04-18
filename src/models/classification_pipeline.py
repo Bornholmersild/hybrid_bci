@@ -1749,7 +1749,7 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
 
     logger_ins = ExperimentLogger(save_path = log_dir)
     split_ins = Manage3Split(seed = SEED)
-    model_handler_ins = SingleNetHandler(model_name = model_name, sensor_name = sensor_name)
+    model_handler_ins = SingleNetHandler(model_name = model_name, sensor_name = 'EEG')
     EMG_ins = EMGStreamProcessor(fs = FREQ, lowcut=EMG_LOWCUT, highcut=EMG_HIGHCUT,
                              reject_config_dict = REJECT_CONFIG_DICT,
                              rms_window = 200, rms_step = 25,
@@ -1826,8 +1826,8 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
-    NUM_INITIAL_DATA_POINTS = 75
+    MAX_NUM_TRIALS = 30             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 15
     DATA_CH = num_channels
     NUM_CLASSES = (2 * num_motions + 1) if sensor_name == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
@@ -3877,7 +3877,7 @@ def main():
     # subjects = ['subject_0', 'subject_1']
     
     sensor_name = 'EMG'
-    singleNet_save_path = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_TESTER'
+    singleNet_save_path = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_noNorm'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
@@ -3989,13 +3989,16 @@ def mcnemar_test(y_true, pred_A, pred_B):
 if __name__ == '__main__':
     # compare_all_models()
     
+    # % MAXPOOL IS DEACTIVATED
+    # COMPLEX MODEL ENABLED
+    # Norm deactivated
     # main()
     
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/SingleNet_CNN_LSTM_ATTENTION_EEG', include_all=False)
+    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_1Maxpool_complexModel_noNorm', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]

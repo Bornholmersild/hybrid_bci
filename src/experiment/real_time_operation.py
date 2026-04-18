@@ -142,7 +142,6 @@ class EMANormalizer:
         batch_var = np.var(x, axis=0)
 
         if self.mu is None or self.var is None:
-            print('IS NONE?')
             self.mu = batch_mean
             self.var = batch_var
 
@@ -226,9 +225,9 @@ class EMGStreamProcessor:
         #==================#
         # 4) Normalization #
         #==================#
-        norm = self.ema_ins.update(rms)
+        # norm = self.ema_ins.update(rms)
 
-        return norm
+        return rms
 
     def load_subject_data(self, subj : str, finger : str, modality : str, trim_period : int = 3, trial_period : int = 9):
         '''
