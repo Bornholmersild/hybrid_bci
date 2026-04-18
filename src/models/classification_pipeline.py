@@ -18,6 +18,8 @@ from copy import deepcopy       # Used for copy model_state
 import time
 import matplotlib.pyplot as plt
 
+from typing import Dict, List
+
 # Analysis
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
@@ -28,6 +30,7 @@ from statsmodels.stats.contingency_tables import mcnemar
 from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing #, RejectBadEpochs, Filtering #E402
 from src.utilities.trainer_and_evaluator import FusionNet_train_eval, SingleNet_train_eval
 from src.utilities.load_and_visualize_data import load_datasets
+from src.experiment.real_time_operation import BandpassFilter, NotchFilter, EMANormalizer, EMGStreamProcessor
 
 # Avoid messages for sherpa
 logging.getLogger("GP").setLevel(logging.CRITICAL)
@@ -1061,7 +1064,7 @@ class Manage3Split:
         '''
         self.rng = np.random.default_rng(seed)
     
-    def build_modality_split(self, epoch_dict: dict, fs: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def build_modality_split(self, epoch_dict: Dict, fs: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         '''
         Random shuffle indicies for trials and divide into train, validation and test dataset.
 
@@ -1279,6 +1282,56 @@ class Manage3Split:
         rest_all = np.concatenate(rest_list)
         X_list.append(rest_all)
         y_list.append(np.full(len(rest_all), label_counter))
+
+        X = np.concatenate(X_list)
+        y = np.concatenate(y_list)
+
+        return X, y
+
+    def build_dataset_window_relabel(self, X_epoch, X_labels, subjects, split):
+        '''
+        Only used for subject-dependent classification for real-time applicaiton
+        Uses window segments with corresponding labels
+        '''
+        X_list = []
+        y_list = []
+        rest_list = []
+
+        label_counter = 0
+        classes_increment = 2           # Used to increase labels for motions (contract and release). 
+
+        for motion in X_epoch[subjects[0]].keys():
+            for subj in subjects:
+
+                data = X_epoch[subj][motion][split]
+                labels = X_labels[subj][motion][split]
+                
+                # Indicies for classes
+                rest_mask = np.where(labels == 'rest')[0]
+                contract_mask = np.where(labels == 'contract')[0]
+                release_mask = np.where(labels == 'release')[0]
+
+                # Contract
+                contract = data[contract_mask]
+                X_list.append(contract)
+                y_list.append(np.full(len(contract), 0 + label_counter))
+
+                # Release
+                release = data[release_mask]
+                X_list.append(release)
+                y_list.append(np.full(len(release), 1 + label_counter))
+
+                # Rest
+                rest = data[rest_mask]
+                rest_list.append(rest)
+
+            label_counter += classes_increment
+
+        last_label = max(y_list[-1]) + 1            # Extract last label, add 1 to include rest label
+
+        rest_all = np.concatenate(rest_list)
+        X_list.append(rest_all)
+        y_list.append(np.full(len(rest_all), last_label))
 
         X = np.concatenate(X_list)
         y = np.concatenate(y_list)
@@ -1651,9 +1704,283 @@ def check_model(model_name : str = None, sensor_name : str = None, num_motions :
     if num_motions != 2 and num_motions != 7:
         raise ValueError(f'Num motions : {num_motions} not valid') 
 
+def compute_class_weights(y_train):
+
+    classes, counts = np.unique(y_train, return_counts=True)
+
+    print("Class distribution:")
+    for c, cnt in zip(classes, counts):
+        print(f"Class {c}: {cnt}")
+
+    # Inverse frequency weighting
+    weights = 1.0 / counts
+
+    # Normalize (optional but recommended)
+    weights = weights / weights.sum() * len(classes)
+
+    class_weights = np.zeros(len(classes))
+    class_weights[classes] = weights
+
+    print("Class weights:", class_weights)
+    return class_weights
 #==============================#
 # Traning of model Per subject #
 #==============================#
+
+def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None, num_motions : int = 2):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
+
+    LOG_NAME = f'{subject_name}'
+    log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+    sensor_name = str.upper(sensor_name)
+    FREQ = EMG_FREQ if sensor_name == 'EMG' else EEG_FREQ
+
+    check_model(model_name = model_name, sensor_name = sensor_name, num_motions = num_motions)
+
+    #==========================#
+    # NOTE: Tensorboard config #
+    #==========================#
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')                                        # Use when having tensorboard
+    os.makedirs(log_dir, exist_ok=False)                                                          # use without tensorboard
+
+    logger_ins = ExperimentLogger(save_path = log_dir)
+    split_ins = Manage3Split(seed = SEED)
+    model_handler_ins = SingleNetHandler(model_name = model_name, sensor_name = sensor_name)
+    EMG_ins = EMGStreamProcessor(fs = FREQ, lowcut=EMG_LOWCUT, highcut=EMG_HIGHCUT,
+                             reject_config_dict = REJECT_CONFIG_DICT,
+                             rms_window = 200, rms_step = 25,
+                             hampel_window = 100, hampel_sigma = 3, base_dir = data_dir)
+    if sensor_name == 'EMG':
+        pass
+    else:
+        raise ValueError('Can currently only be EMG modaility')
+    #===========#
+    # Load data #
+    #===========#
+    X_epoch = {}
+    X_labels = {}
+    motion_list = ['pinky', 'ring', 'middle', 'index', 'thumb', 'pinchGrip', 'fullGrip'] if num_motions == 7 else ['index', 'thumb']
+    SUBJECTS_IDs = ['subject_0']
+    
+    for subj in SUBJECTS_IDs:
+        X_epoch[subj] = {}
+        X_labels[subj] = {}
+
+        for ml in motion_list:
+            data, num_epochs = EMG_ins.load_subject_data(subj = subj, finger = ml, modality = sensor_name, trim_period = TRIM_PERIOD, trial_period = TRIAL_PERIOD)    
+
+            # Trial-level split
+            train_idx, val_idx, test_idx = split_ins._split_trials(num_trials = num_epochs, train_ratio = 0.7)
+
+            # Split each window into train, val, test sets
+            X_epoch[subj][ml] = {}
+            X_labels[subj][ml] = {}
+
+            for split_name, split_indicies in zip(['train', 'val', 'test'], [train_idx, val_idx, test_idx]):
+                split_data = data[split_indicies]
+                
+                X_e, y_e = EMG_ins.relabel_windows(
+                    epochs = split_data,
+                    window_samples = 1000,
+                    step_samples = 200,
+                    fs = EMG_FREQ,
+                    labels = ['rest', 'contract', 'release']
+                )
+
+                X_epoch[subj][ml][split_name] = X_e
+                X_labels[subj][ml][split_name] = y_e
+    
+    datasets = {}
+    for split in ['train', 'val', 'test']:
+        X, y = split_ins.build_dataset_window_relabel(
+            X_epoch = X_epoch,
+            X_labels = X_labels,
+            subjects = SUBJECTS_IDs,
+            split = split
+        )      
+
+        datasets[split] = (X, y) 
+    
+    X_train, y_train = datasets['train'] 
+    X_val, y_val = datasets['val'] 
+    X_test, y_test = datasets['test'] 
+
+    _, _, num_channels = X_train.shape
+
+    #=================#
+    # Single datasets #
+    #=================#
+    train_eval_ins = SingleNet_train_eval()
+
+    print('\nTraining dataset shapes:')
+    train_dataset_ins = SingleManageDataset(X_train, y_train, data_type = sensor_name)
+    print('Validation dataset shapes:')
+    val_dataset_ins = SingleManageDataset(X_val, y_val, data_type = sensor_name)
+    print('Testing dataset shapes:')
+    test_dataset_ins = SingleManageDataset(X_test, y_test, data_type = sensor_name)
+
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 100             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 75
+    DATA_CH = num_channels
+    NUM_CLASSES = (2 * num_motions + 1) if sensor_name == 'EMG' else 3
+    NUM_EPOCHS = 250                 # 150 - 200
+    PATIENCE = 25 
+    
+    #===========#
+    # Constants #
+    #===========#
+    global_best_vloss = float("inf")                # Used to only save one model.
+
+    #====================================#
+    # SHERPA Hyperparameter Optimazation #
+    #====================================#
+
+    parameters = model_handler_ins.get_hyperparameters()
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
+    )
+    # Study represents the hyperparameter optimization itself
+    study = sherpa.Study(
+        parameters = parameters,
+        algorithm = algorithm,
+        lower_is_better = True,
+        disable_dashboard = True
+    )
+
+    # Class weights (Unbalanced classes)
+    class_weights = compute_class_weights(y_train = y_train)
+    class_weights = torch.tensor(class_weights, dtype = torch.float32).to(device)
+
+    for trial in study:
+        model_config = model_handler_ins.build_model_config(
+            trial = trial,
+            input_dim = DATA_CH,
+            TOTAL_CLASSES = NUM_CLASSES
+        )
+        train_config = model_handler_ins.build_training_config(
+            trial = trial
+        )
+
+        #=================#
+        # Single datasets #
+        #=================#
+        model = model_handler_ins.get_model(config = model_config)
+        model.to(device)
+
+        criterion = nn.CrossEntropyLoss(weight = class_weights)
+        optimizer = torch.optim.AdamW(params = model.parameters(), lr = train_config['lr'], weight_decay = train_config['weight_decay'])
+
+        # DataLoaders (update batch_size)
+        train_loader = DataLoader(train_dataset_ins, batch_size = train_config['batch_size'], shuffle = True, pin_memory = pin_memory, num_workers = 0)
+        val_loader = DataLoader(val_dataset_ins, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
+        test_loader = DataLoader(test_dataset_ins, batch_size = train_config['batch_size'], shuffle = False, pin_memory = pin_memory, num_workers = 0)
+
+        best_train_loss = None
+        best_val_loss = float("inf")
+        best_val_acc = None
+
+        best_epoch = 0
+        best_state_dict = None
+        early_stopping_counter = 0
+
+        #===================================#
+        # NOTE: Tensorboard config          #
+        #   Enable all if using tensorboard #
+        #===================================#
+        # log_folder = os.path.join(log_dir, f"trial_{trial.id}")               
+        # os.makedirs(log_folder, exist_ok=False)
+        # writer = SummaryWriter(os.path.join(log_folder, 'trial_{}_timestamp_{}'.format(trial.id, timestamp)))
+
+        for epoch in range(NUM_EPOCHS):
+
+            # Train model
+            avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
+
+            # Validate model
+            avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+
+            # Tensor Board logging
+            # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
+            # writer.add_scalars('Accuracy Validation', {'Validation' : vacc }, epoch + 1)
+            # writer.flush()
+
+            study.add_observation(trial = trial,
+                                iteration = epoch,
+                                objective = avg_vloss)
+
+            # Track best performance, and save the model's state
+            if avg_vloss < best_val_loss:
+                best_val_loss = avg_vloss
+                best_epoch = epoch
+
+                best_state_dict = deepcopy(model.state_dict())
+                best_optimizer_dict = deepcopy(optimizer.state_dict())
+ 
+                best_train_loss = avg_train_loss
+                best_val_acc = vacc
+
+                early_stopping_counter = 0
+
+            else:
+                early_stopping_counter += 1
+
+                if early_stopping_counter >= PATIENCE:
+                    break
+
+            print(
+                f'{subject_name} | '
+                f'Trial {trial.id}/{MAX_NUM_TRIALS} | '
+                f'Epoch {epoch+1}/{NUM_EPOCHS} | '
+                f'Train {avg_train_loss:.4f} | '
+                f'Val {avg_vloss:.4f} | '
+                f'Acc {vacc:.2f} |',
+                f'Early stopping {early_stopping_counter} |',
+                end='\r',
+                flush=True
+            )
+
+        model.load_state_dict(best_state_dict)
+
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = model, test_loader = test_loader, criterion = criterion, device = device)
+        
+        logger_ins.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = best_epoch,
+            train_loss = best_train_loss,
+            val_loss = best_val_loss,
+            val_acc = best_val_acc,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+
+        if best_val_loss < global_best_vloss :
+            global_best_vloss = best_val_loss
+
+            torch.save({
+                "model_name": model_name,
+                "sensor_name": sensor_name,
+                "model_state": best_state_dict,
+                "model_args": model_config, 
+                "optimizer_state_dict": best_optimizer_dict,
+                "hyperparameters": trial.parameters,}, 
+                r'{}\model.pth'.format(log_dir))
+            
+        # writer.close()                            # NOTE: Enable with tensorboard
+        study.finalize(trial, status = 'COMPLETED')
+
 def singleNet_classfication_dependent(subject_name : str | list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = None, num_motions : int = 2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
@@ -2097,7 +2424,6 @@ def fusionNet_classfication_dependent(subject_name : str | list, sherpa_log_fold
 #==================================#
 # Traning of model across subjects #
 #==================================#
-
 def singleNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject_dependent/SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = 'SingleNet_LSTM', num_motions : int = 2):
     # When chancing between EEG and EMG
     # preprocessing instance
@@ -3550,14 +3876,14 @@ def main():
     # subjects = ['subject_0', 'subject_1']     # Attention
     # subjects = ['subject_0', 'subject_1']
     
-    sensor_name = 'EEG'
-    singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM+ATTENTION_EEG_TESTER'
+    sensor_name = 'EMG'
+    singleNet_save_path = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_TESTER'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'   # noqa: F841
     
-    singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
+    singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 

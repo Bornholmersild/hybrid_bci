@@ -940,21 +940,21 @@ def quick_visulize():
     EEG_files = load_ins.find_flex_files(
         subjects = 'subject_0',
         modality = 'EEG',
-        fingers = 'noise',
+        fingers = 'index',
         prefix = 'flex'
     )
 
     EMG_files = load_ins.find_flex_files(
         subjects = 'subject_0',
         modality = 'EMG',
-        fingers = 'noise',
+        fingers = 'index',
         prefix = 'flex'
     )
 
     marker_files = load_ins.find_flex_files(
         subjects = 'subject_0',
         modality = 'Markers',
-        fingers = 'noise',
+        fingers = 'index',
         prefix = 'flex'
     )
 
@@ -976,7 +976,8 @@ def quick_visulize():
         preprocessing_func = EMG_ins.preprocessing_routine,
         EMG_config_dict = EMG_CONFIG_DICT
     )
-
+    
+    print('RMS shape final: ', RMS.shape)
     markers = load_ins.load_datasets_marker(marker_files)
 
     total_epochs = np.sum(epochs_overview)
@@ -988,13 +989,14 @@ def quick_visulize():
     vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
     vis_EEG_ins = visualize_EEG(fs = EEG_FREQ, trial_period = TRIAL_PERIOD)
 
-    # vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = None, display_window = 0)
-    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
+    print('RMS epoch shape: ', RMS_epoch.shape, EMG_epoch.shape)
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = markers, display_window = 0)
+    vis_EMG_ins.plot_rms_across_channels(emg = EMG_epoch.mean(axis=0), rms = RMS_epoch.mean(axis = 0), markers = markers, display_window = 0)
 
 
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    vis_EEG_ins.plot_egg_across_channels(EEG, markers = 0, display_window = 0, ch_list = all_ch, channels_per_figure=3)
-    vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+    # vis_EEG_ins.plot_egg_across_channels(EEG, markers = 0, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+    # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
 
 def test_bad_epochs():
     #-----------#
@@ -1696,12 +1698,13 @@ class DataAnalysis():
         
 if __name__ == '__main__':
     # remove_bad_epochs()
-    # quick_visulize()
+    
+    quick_visulize()
     # test_bad_epochs()
 
-    subjects = ['subject_0', 'subject_1']
-    Da_ins = DataAnalysis()
-    Da_ins.inspect_frequency_ranges(subjects = subjects)
+    # subjects = ['subject_0', 'subject_1']
+    # Da_ins = DataAnalysis()
+    # Da_ins.inspect_frequency_ranges(subjects = subjects)
     
 
     # base_dir = Path().resolve() / 'src/experiment/data'

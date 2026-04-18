@@ -810,7 +810,7 @@ class EMG_preprocessing(Filtering):
         # 3) TRIM #
         #=========#       
         EMG_trim = EMG_bandpass[trim_start : trim_end, :]
-
+        
         # -----------------#
         # 4) Hampel filter #
         # -----------------#
@@ -820,7 +820,7 @@ class EMG_preprocessing(Filtering):
         # 5) RMS #
         # -------#
         RMS = self.rms_conv(signal = EMG_hampel, window_size = rms_windowsize, step_size = rms_stepsize)
-
+        
         return RMS, EMG_hampel, num_epochs
 
 if '__main__' == __name__:
