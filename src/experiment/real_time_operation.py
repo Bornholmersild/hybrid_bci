@@ -151,7 +151,6 @@ class EMANormalizer:
         batch_var = np.var(x, axis=0)
 
         if self.mu is None or self.var is None:
-            print('IS NONE?')
             self.mu = batch_mean
             self.var = batch_var
 
