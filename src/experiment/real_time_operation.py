@@ -2,19 +2,28 @@
 import numpy as np
 import pandas as pd
 
+import matplotlib.pyplot as plt
+from math import ceil
+
 # Manage file paths
 from pathlib import Path
+import os
+
+# Model
+import torch
 
 # Syncronization
-from time import time, perf_counter
+from time import time, perf_counter, sleep
 
 # External libraries
 from src.utilities.pytrigno import TrignoEMG
 
 # Own implementations
-from src.utilities.preprocessing import EEG_preprocessing, EMG_preprocessing, Filtering
 from src.utilities.load_and_visualize_data import load_datasets
-from src.utilities.preprocessing import RejectBadEpochs 
+from src.utilities.preprocessing import RejectBadEpochs
+from src.models.classification_pipeline import SingleNet_CNN_LSTM_ATTENTION
+
+
 # Data types
 from typing import Tuple, Dict, List
 
@@ -39,13 +48,13 @@ EEG_HIGHCUT = 30
 EEG_NUM_CH = len(EEG_USEABLE_CHANNELS)
 EMG_NUM_CH = 3
 
-RMS_SAMPLING_WINDOW = 500           # 500 samples - 250 ms                      32 samples - 16 ms                                       
-RMS_WINDOW_STEPSIZE = 50            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
+RMS_SAMPLING_WINDOW = 200           # 500 samples - 250 ms                      32 samples - 16 ms                                       
+RMS_WINDOW_STEPSIZE = 25            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
 
 HAMPEL_WINDOWSIZE = 100
-HAMPEL_SIGMA = 2
+HAMPEL_SIGMA = 3                    # Usually 2
 
-EMG_SELECT_SENSORS = (0, 2)
+EMG_SELECT_SENSORS = (0, 1)
 EMG_SAMPLES_PER_READ = 200
 
 EMG_CONFIG_DICT = {
@@ -226,9 +235,9 @@ class EMGStreamProcessor:
         #==================#
         # 4) Normalization #
         #==================#
-        norm = self.ema_ins.update(rms)
+        # norm = self.ema_ins.update(rms)
 
-        return norm
+        return rms
 
     def load_subject_data(self, subj : str, finger : str, modality : str, trim_period : int = 3, trial_period : int = 9):
         '''
@@ -445,10 +454,7 @@ class EMGStreamProcessor:
 class EMGRealTime:
     def __init__(self, config_dict : Dict, select_sensors : Tuple = (0, 2), samples_per_read : int = 200, units : str = 'mV'):
         self.config = config_dict
-        # self.EMG_ins = TrignoEMG(channel_range = select_sensors, samples_per_read = samples_per_read, units = units)
-        self.filt_ins = Filtering(fs = EMG_FREQ)
-        EMG_rms_conv_ins = EMG_preprocessing()
-        self.rms_conv = EMG_rms_conv_ins.rms_conv
+        self.EMG_ins = TrignoEMG(channel_range = select_sensors, samples_per_read = samples_per_read, units = units)
 
     def start_stream(self):
         print('EMG stream initilizing')
@@ -471,34 +477,6 @@ class EMGRealTime:
 
     def extract_data(self):
         return self.EMG_ins.read()
-
-    def preprocess(self, raw_emg : np.ndarray):
-        #============================#
-        # 1) NOTCH + BANDPASS FILTER #
-        #============================#
-        EMG_notch = self.filt_ins.notch(data = raw_emg, cutoff = 50, Q = 30)
-        EMG_bandpass, _ = self.filt_ins.butter_bandpass(data = EMG_notch, lowcut = EMG_LOWCUT, highcut = EMG_HIGHCUT, order=4)
-
-        #==================#
-        # 2) Hampel filter #
-        #==================#
-        EMG_hampel = self.filt_ins.hampel_filter(x = EMG_bandpass,
-                                                 window_size = self.config['hampel_windowsize'],
-                                                 n_sigmas = self.config['hampel_sigma'])
-
-        #========#
-        # 3) RMS #
-        #========#
-        RMS = self.rms_conv(signal = EMG_hampel,
-                            window_size = self.config['rms_windowsize'],
-                            step_size = self.config['rms_stepsize'])
-        
-        #===========#
-        # 4) Zscore #
-        #===========#
-        RMS_norm = self.filt_ins.zscore(data = RMS, mode = 'within_ch')
-
-        return RMS_norm
 
 class Buffer:
     def __init__(self, max_size : int, num_ch : int, window_size : int, step_size : int):
@@ -548,7 +526,56 @@ class Buffer:
         self.read_idx = (self.read_idx + self.step_size) % self.max_size
 
         return window
+
+class Model():
+    def __init__(self, path_to_model : Path):
+        self.path_dir = path_to_model
+        self.model = None
+        self.device = None
+
+        self.initilize_model()
+
+        self.pred_mapping = {
+            0 : 'Index Contract',
+            1 : 'Index Release',
+            2 : 'Thumb Contract',
+            3 : 'Thumb Release',
+            4 : 'Rest'
+        }
+
+    def initilize_model(self):
+        if not os.path.exists(self.path_dir):
+            raise FileExistsError(self.path_dir)
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        #pin_memory = torch.cuda.is_available()
+
+        #======================#
+        # Load model arguments #
+        #======================#
+        checkpoint = torch.load(f = self.path_dir / "model.pth", map_location = self.device)
+        model_args = checkpoint["model_args"]
+
+        self.model = SingleNet_CNN_LSTM_ATTENTION(**model_args)
+
+        self.model.load_state_dict(checkpoint["model_state"])
+        self.model.to(self.device)
+
+        self.model.eval()
+
+        print('Model initilized')
     
+    def predict(self, input_data):
+        inp = torch.tensor(input_data, dtype = torch.float32).to(self.device).unsqueeze(0)          # Match model dim (1, S, Ch)
+
+        with torch.no_grad():
+            logits, _, _ = self.model(inp)
+            pred_idx = torch.argmax(logits, dim=1).item()
+        
+        pred_map = self.pred_mapping[pred_idx]
+
+        return pred_map
+        
 def examine_latency():
     base_dir = Path(__file__).resolve().parent / 'data'
     print(base_dir)
@@ -609,46 +636,137 @@ def examine_latency():
     print(f'Average time for buffer operations: {np.mean(t_buffer) * 1000:.2f} ms')
     print(f'Average time for preprocessing: {np.mean(t_preprocess) * 1000:.2f} ms')
 
-
-
-
-
-        
-
-def main():
+def Trigno_test():
     EMG = EMGRealTime(config_dict = EMG_CONFIG_DICT,
+                    select_sensors = (0, 1),
+                    samples_per_read = EMG_SAMPLES_PER_READ)
+    
+    EMG.start_stream()
+
+    print('Sleep')
+    tim = 3
+    sleep(tim)
+
+    EMG.end_stream()
+
+    data = EMG.extract_data()
+
+    for i in range(5*tim + 5):
+        print(i)
+        data = np.array(data)
+        print(data.shape)
+        print(data.mean())
+    
+
+def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0'):
+    model_path_folder = Path(__file__).resolve().parents[2] / f"models/loggings/real_time/{model_folder_name}"
+
+    STREAM = EMGRealTime(config_dict = EMG_CONFIG_DICT,
                       select_sensors = EMG_SELECT_SENSORS,
                       samples_per_read = EMG_SAMPLES_PER_READ)
+    
     EMG_BUFFER = Buffer(max_size = 10000,
                         num_ch = EMG_NUM_CH,
                         window_size = RMS_SAMPLING_WINDOW,
                         step_size = RMS_WINDOW_STEPSIZE)
     
-    EMG.start_stream()                      # Initilize streaming
+    PREPROCESS = EMGStreamProcessor(fs = EMG_FREQ, lowcut = EMG_LOWCUT, highcut = EMG_HIGHCUT,
+                                    reject_config_dict = EMG_CONFIG_DICT, 
+                                    rms_window = RMS_SAMPLING_WINDOW, rms_step = RMS_WINDOW_STEPSIZE,
+                                    hampel_window = HAMPEL_WINDOWSIZE, hampel_sigma = HAMPEL_SIGMA,     # sigma usually 2
+                                    base_dir = 'Unused')
+    
+    MODEL = Model(path_to_model = model_path_folder)
 
+    
+    STREAM.start_stream()                      # Initilize streaming
+    '''
+    #=================================================================#
+    num_channels = EMG_SELECT_SENSORS[1] - EMG_SELECT_SENSORS[0] + 1
+    FS = 2000
+    WINDOW_SEC = 1
+    BUFFER_LEN = FS * WINDOW_SEC
+
+    plt.ion()
+    n_cols = 2
+    n_rows = ceil(num_channels / n_cols)
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 6), sharex=True)
+    axes = axes.flatten()
+
+    x = np.arange(BUFFER_LEN) / FS
+    lines = []
+
+    for ch in range(num_channels):
+        ax = axes[ch]
+        line, = ax.plot(x, np.zeros(BUFFER_LEN), lw=1)
+        ax.set_title(f"Sensor {ch}")
+        ax.set_ylim(-0.1, 0.1)           # adjust after seeing real envelope ranges
+        ax.set_xlim(0, WINDOW_SEC)
+        lines.append(line)
+
+    # Hide unused axes
+    for i in range(num_channels, len(axes)):
+        axes[i].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+                # Update plot lines
+            for ch in range(num_channels):
+                lines[ch].set_ydata(X_win[ch])
+
+            plt.pause(0.001)  # allow GUI to update (very small delay)
+
+    plt.ioff()
+    plt.show()
+    '''
+
+    #=================================================================#
+    time_tracker = []
+    buffer_fill_size = 1
     try:
         while True:
-                X_emg = EMG.extract_data()              # Read data
+            X_emg = STREAM.extract_data()              # Read data            
+
+            t0 = time()
 
             # Load into circular buffer
+            EMG_BUFFER.add_data(data = X_emg)
+
+            if buffer_fill_size <= 5:
+                buffer_fill_size += 1
+                continue
             
             # Extract window of data by sliding window
+            X_win = EMG_BUFFER.get_window()
 
             # Preprocess window of data
+            X_pre = PREPROCESS.update(chunk = X_win)                # Without normalization
 
             # Insert into model
+            X_pred = MODEL.predict(input_data = X_pre)
 
             # Output of the model
-    
+            print(X_pred)
+
+            time_diff = (time() - t0) * 1000
+            time_tracker.append(time_diff)
+
+
     except KeyboardInterrupt:
         print('Terminate program')
-        # Does it go to finally afterwards or do I need to call end_stream here as well?
     
     finally:
-        EMG.end_stream()
+        STREAM.end_stream()
+        if len(time_tracker) > 0:
+            print(f'Average time after extract data {np.mean(time_tracker):.2f} ms')
+        
 
 if __name__ == "__main__":
-    examine_latency()
+    main()
+    # Trigno_test()
+    # examine_latency()
     # print( ((6000 - 500) / 50) + 1)
 
 
