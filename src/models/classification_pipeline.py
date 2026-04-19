@@ -3998,7 +3998,7 @@ if __name__ == '__main__':
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_1Maxpool_complexModel_noNorm', include_all=False)
+    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_noNorm', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]
