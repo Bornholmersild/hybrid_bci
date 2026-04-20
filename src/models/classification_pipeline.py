@@ -2297,8 +2297,8 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
     )
 
     # Class weights (Unbalanced classes)
-    class_weights = compute_class_weights(y_train = y_train)
-    class_weights = torch.tensor(class_weights, dtype = torch.float32).to(device)
+    # class_weights = compute_class_weights(y_train = y_train)
+    # class_weights = torch.tensor(class_weights, dtype = torch.float32).to(device)
 
     for trial in study:
         model_config = model_handler_ins.build_model_config(
@@ -2316,7 +2316,7 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
         model = model_handler_ins.get_model(config = model_config)
         model.to(device)
 
-        criterion = nn.CrossEntropyLoss(weight = class_weights)
+        criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.AdamW(params = model.parameters(), lr = train_config['lr'], weight_decay = train_config['weight_decay'])
 
         # DataLoaders (update batch_size)
@@ -4315,13 +4315,13 @@ def main():
     # subjects = ['subject_0', 'subject_1']
     
     sensor_name = 'EMG'
-    singleNet_save_path = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_noNorm'
+    singleNet_save_path = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight_7motions'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'   # noqa: F841
     
-    singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
+    singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 7)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 
@@ -4436,7 +4436,7 @@ if __name__ == '__main__':
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_1Maxpool_complexModel', include_all=False)
+    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight_7motions', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]
