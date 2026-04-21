@@ -2930,8 +2930,8 @@ def singleNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
     #========================================================#
     # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
     #========================================================#
-    MAX_NUM_TRIALS = 75             # 75 - 250 (simply to max) 
-    NUM_INITIAL_DATA_POINTS = 35
+    MAX_NUM_TRIALS = 25             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 15
     DATA_CH = EMG_NUM_CH if sensor_name == 'EMG' else EEG_NUM_CH
     NUM_CLASSES = 5 if sensor_name == 'EMG' else 3
     NUM_EPOCHS = 250                 # 150 - 200
@@ -3696,7 +3696,8 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     
     # print('Last ten')
     # data_len = len(data['trials'])
-    # for idx in range(data_len - 50, data_len):
+    # print(data_len)
+    # for idx in range(data_len - 40, data_len):
     #     trial = data['trials'][idx]
 
     #     # print('Rank:', rank + 1)
@@ -3704,13 +3705,14 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
     #     print('Epochs', trial['best_epoch'])
     #     print('Training loss:' , trial['training_loss'])
     #     print('Validation loss:', trial['validation_loss'])
+    #     print('Validation mean: ', np.mean(trial['validation_loss']))
     #     print('Validation accuracy:', trial['validation_accuracy'])
     #     print('Test accuracy:', trial['test_accuracy'])
     #     print('Hyperparameters:\n', trial['hyperparameters'], '\n')
 
     best_vloss = min(
         data["trials"],
-        key=lambda x: x["validation_loss"]
+        key=lambda x: np.mean(x["validation_loss"])
     )
     best_tacc = max(
         data['trials'],
@@ -3725,6 +3727,7 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('         Stoped at epoch', best_value['best_epoch'])
         print('         Training loss:' , best_value['training_loss'])
         print('         validation loss', best_value['validation_loss'])
+        print('         validation mean:', np.mean(best_value['validation_loss']))
         print('         validation acc' , best_value['validation_accuracy'])
         print('         Test accuracy: ', best_value["test_accuracy"])
         print('         Hyperparameter: ', best_value['hyperparameters'])
@@ -4315,17 +4318,17 @@ def main():
     # subjects = ['subject_0', 'subject_1']
     
     sensor_name = 'EMG'
-    singleNet_save_path = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight_7motions'
+    singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM_EMG'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
     fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'   # noqa: F841
     
-    singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 7)
+    # singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 
-    # singleNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name)
+    singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
     
     print('Classification COMPLETE\n'
@@ -4436,7 +4439,7 @@ if __name__ == '__main__':
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'real_time/SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight_7motions', include_all=False)
+    inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/SingleNet_CNN+LSTM_EMG', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]
