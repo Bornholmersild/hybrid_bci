@@ -25,10 +25,6 @@ from src.models.classification_pipeline import SingleNet_CNN_LSTM_ATTENTION, EMG
 # Data types
 from typing import Tuple, Dict #List
 
-from scipy.signal import iirnotch, lfilter, lfilter_zi, butter
-from scipy.ndimage import median_filter
-from scipy.ndimage import uniform_filter1d
-
 #==================#
 # Global variables #
 #==================#
@@ -57,6 +53,8 @@ SLIDING_WINDOW_STEPSIZE = 200
 
 EMG_SELECT_SENSORS = (0, 2)
 EMG_SAMPLES_PER_READ = 200
+
+state = "REST"
 
 EMG_CONFIG_DICT = {
     'rms_windowsize' : RMS_SAMPLING_WINDOW,
@@ -206,8 +204,37 @@ class Model():
             pred_idx = torch.argmax(logits, dim=1).item()
         
         pred_map = self.pred_mapping[pred_idx]
+        
+        probs = torch.softmax(logits, dim=1)
+        confidence = probs[0, pred_idx].item()
 
-        return pred_map
+        return pred_map, confidence
+    
+class StateLogic():
+    def __int__(self):
+        pass
+
+    def update(self, pred, confidence):
+        global state
+
+        if confidence < 0.6:
+            return state
+
+        if state == "REST":
+            if pred == "Index Contract":
+                state = "INDEX_ACTIVE"
+            elif pred == "Thumb Contract":
+                state = "THUMB_ACTIVE"
+
+        elif state == "INDEX_ACTIVE":
+            if pred == "Index Release":
+                state = "REST"
+
+        elif state == "THUMB_ACTIVE":
+            if pred == "Thumb Release":
+                state = "REST"
+
+        return state
 
 ''' examine_latency
 def examine_latency():
@@ -311,6 +338,11 @@ def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0
                                     rms_window = RMS_SAMPLING_WINDOW, rms_step = RMS_WINDOW_STEPSIZE,
                                     hampel_window = HAMPEL_WINDOWSIZE, hampel_sigma = HAMPEL_SIGMA,     # sigma usually 2
                                     base_dir = 'Unused')
+    
+    STATE = StateLogic()
+
+    # mu = np.load(model_path_folder / "mu.npy")
+    # sigma = np.load(model_path_folder / "sigma.npy")
 
     
     STREAM.start_stream()                      # Initilize streaming
@@ -377,17 +409,25 @@ def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0
             
             # Preprocess window of data
             X_pre = PREPROCESS.update(chunk = X_win)                # Without normalization
-            
 
             if X_pre is None:
                 print('Pre is none')
                 continue
+            
+            # Normalize
+            # X_norm = (X_pre - mu) / (sigma + 1e-8)
 
             # Insert into model
-            X_pred = MODEL.predict(input_data = X_pre)
+            X_pred, confidence = MODEL.predict(input_data = X_pre)
             
             # Output of the model
-            print(X_pred)
+            state = STATE.update(pred = X_pred, confidence = confidence)
+            print(
+            f"STATE: {state:<15} | "
+            f"PRED: {X_pred:<20} | "
+            f"CONF: {confidence:>6.2f}",
+            end="\r"
+            )
 
             time_diff = (time() - t0) * 1000
             time_tracker.append(time_diff)
