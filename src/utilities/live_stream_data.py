@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 from scipy.signal import butter, sosfilt, iirnotch
 from math import ceil
+from scipy.signal import lfilter
 
 # ---------------- CONFIG ----------------
 CHANNEL_RANGE = (1, 2)       # 2 channels: 0 and 1
@@ -152,7 +153,6 @@ def stream_data_filt():
 
                 # --- 2) Optional: notch 50 Hz ---
                 # If line noise is bad, you can uncomment:
-                from scipy.signal import lfilter
                 y_bp = lfilter(b_notch, a_notch, y_bp)
 
                 # --- 3) Rectify ---

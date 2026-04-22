@@ -1034,10 +1034,10 @@ class MultiManageDataset(torch.utils.data.Dataset):
         self.eeg_labels = torch.tensor(map_labels, dtype=torch.long)
         self.emg_labels = torch.tensor(emg_labels, dtype=torch.long)
 
-        print('eeg shape:', self.eeg.shape)
-        print('emg shape:', self.emg.shape)
-        print('eeg labels shape:', self.eeg_labels.shape)
-        print('emg labels shape:', self.emg_labels.shape)
+        # print('eeg shape:', self.eeg.shape)
+        # print('emg shape:', self.emg.shape)
+        # print('eeg labels shape:', self.eeg_labels.shape)
+        # print('emg labels shape:', self.emg_labels.shape)
     
     def _map_to_emg_labels(self, labels):
     
@@ -1250,7 +1250,7 @@ class Manage3Split:
     
     def build_dataset_from_subjects(self, X_epoch, subjects, fs):
         '''
-        Only used for subject-dependent classificaiton
+        Only used for subject-independent classificaiton
         '''
         X_list = []
         y_list = []
@@ -1384,19 +1384,38 @@ class KFoldManageDataset(torch.utils.data.Dataset):
     
     def train_one_fold(self, model_handler_ins, train_eval_ins, split_ins,
                    X_epoch, train_ids, val_ids,
-                   config, device, print_config):
+                   config, device, print_config,
+                   single_or_fusion = 'single'):
         
-        # Training set (all except test subject)
-        X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_ids, fs = config['freq'])
-        X_val, y_val = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = val_ids, fs = config['freq'])
+        if single_or_fusion == 'single':
+            # Training set (all except test subject)
+            X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_ids, fs = config['freq'])
+            X_val, y_val = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = val_ids, fs = config['freq'])
 
-        # Build datasets
-        train_dataset = SingleManageDataset(X_train, y_train, data_type = config['sensor'])
-        val_dataset   = SingleManageDataset(X_val, y_val, data_type = config['sensor'])
+            # Build datasets
+            train_dataset = SingleManageDataset(X_train, y_train, data_type = config['sensor'])
+            val_dataset   = SingleManageDataset(X_val, y_val, data_type = config['sensor'])
 
-        train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
-        val_loader   = DataLoader(val_dataset, batch_size = config["batch_size"], shuffle=False)
+            train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
+            val_loader   = DataLoader(val_dataset, batch_size = config["batch_size"], shuffle=False)
+        
+        elif single_or_fusion == 'fusion':
+            EEG_epoch, EMG_epoch = X_epoch
+            X_EEG_train, y_EEG_train = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = train_ids, fs = config['eeg_freq'])
+            X_EEG_val, y_EEG_val = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = val_ids, fs = config['eeg_freq'])
 
+            X_EMG_train, y_EMG_train = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = train_ids, fs = config['rms_freq'])
+            X_EMG_val, y_EMG_val = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = val_ids, fs = config['rms_freq'])
+
+            train_dataset = MultiManageDataset(X_EEG_train, X_EMG_train, y_EEG_train, y_EMG_train)
+            val_dataset = MultiManageDataset(X_EEG_val, X_EMG_val, y_EEG_val, y_EMG_val)
+
+            train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
+            val_loader   = DataLoader(val_dataset, batch_size = config["batch_size"], shuffle=False)
+
+        else:
+            raise ValueError('Programmer error - Think again dummy :-)') 
+        
         model = model_handler_ins.get_model(config = config["model_config"])
         model.to(device)
 
@@ -1440,16 +1459,30 @@ class KFoldManageDataset(torch.utils.data.Dataset):
     
     def retrain_model(self, model_handler_ins, train_eval_ins, split_ins,
                    X_epoch, train_subjects_ids,
-                   config, mean_epochs, device, print_config):
+                   config, mean_epochs, device, print_config,
+                   single_or_fusion = 'single'):
         
-        # Training set (all except test subject)
-        X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_subjects_ids, fs = config['freq'])
+        if single_or_fusion == 'single':
+            # Training set (all except test subject)
+            X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_subjects_ids, fs = config['freq'])
 
-        # Build datasets
-        train_dataset = SingleManageDataset(X_train, y_train, data_type = config['sensor'])
+            # Build datasets
+            train_dataset = SingleManageDataset(X_train, y_train, data_type = config['sensor'])
 
-        train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
+            train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
 
+        elif single_or_fusion == 'fusion':
+            EEG_epoch, EMG_epoch = X_epoch
+            X_EEG_train, y_EEG_train = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = train_subjects_ids, fs = config['eeg_freq'])
+            X_EMG_train, y_EMG_train = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = train_subjects_ids, fs = config['emg_freq'])
+
+            train_dataset = MultiManageDataset(X_EEG_train, X_EMG_train, y_EEG_train, y_EMG_train)
+
+            train_loader = DataLoader(train_dataset, batch_size = config["batch_size"], shuffle=True)
+
+        else:
+            raise ValueError('Programmer error - Think again dummy :-)') 
+        
         # Model
         model = model_handler_ins.get_model(config = config["model_config"])
         model.to(device)
@@ -2744,8 +2777,7 @@ def fusionNet_classfication_dependent(subject_name : str | list, sherpa_log_fold
             trial,
             EEG_CH, EMG_CH,
             EEG_CLASSES, EMG_CLASSES,
-            TOTAL_CLASSES,
-            EEG_num_samples, EMG_num_samples
+            TOTAL_CLASSES
         )
         train_config = model_handler_ins.build_training_config(
             trial = trial
@@ -3070,6 +3102,221 @@ def singleNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
             
         # writer.close()                            # NOTE: Enable with tensorboard
         study.finalize(trial, status = 'COMPLETED')
+
+def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject_dependent/SingleNet_LSTM_EMG', model_name : str = 'SingleNet_LSTM', num_motions = 2):
+    # When chancing between EEG and EMG
+    # preprocessing instance
+    # Load function
+    check_model(model_name = model_name, sensor_name = None, num_motions = num_motions)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
+    print(f"Using device: {device}")
+    print("Pin memory set to:", pin_memory)
+
+    LOG_NAME = 'all_subjects'
+    log_dir = Path(__file__).resolve().parent / f'loggings/{sherpa_log_folder}/{LOG_NAME}'         # Path(__file__).resolve() -> Absolute path to this file
+    data_dir = Path(__file__).resolve().parents[2] / 'src/experiment/data'
+
+    #==========================#
+    # NOTE: Tensorboard config #
+    #==========================#
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')                                        # Use when having tensorboard
+    os.makedirs(log_dir, exist_ok=False)                                                          # use without tensorboard
+
+    logger_ins = ExperimentLogger(save_path = log_dir)
+    load_ins = load_datasets(base_dir = data_dir)
+    split_ins = Manage3Split(seed = SEED)
+    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+    train_eval_ins = FusionNet_train_eval()
+    model_handler_ins = FusionNetHandler(model_name = model_name)
+    Kfold_ins = KFoldManageDataset()
+
+    #====================#
+    # Load Training data #
+    #====================#
+    SUBJECT_IDs = [f'subject_{i}' for i in range(0, 17)]
+    TEST_SUBJECT = ['subject_8']    
+    EEG_epoch = {}
+    EMG_epoch = {}
+
+    motion_list = ['pinky', 'ring', 'middle', 'index', 'thumb', 'pinchGrip', 'fullGrip'] if num_motions == 7 else ['index', 'thumb']
+    for subj in SUBJECT_IDs:
+        EEG_epoch[subj] = {}
+        EMG_epoch[subj] = {}
+
+        for ml in motion_list:
+            eeg_temp, emg_temp, _, _ = load_ins.load_EEG_EMG_data(subject_name = subj,
+                                                                    finger_name = ml,
+                                                                    reject_config_dict = REJECT_CONFIG_DICT,
+                                                                    EEG_preprocessing_func = EEG_ins.preprocessing_routine,
+                                                                    EMG_preprocessing_func = EMG_ins.preprocessing_routine,
+                                                                    EMG_config_dict = EMG_CONFIG_DICT,
+                                                                    EEG_useable_channels = EEG_USEABLE_CHANNELS)
+            EEG_epoch[subj][ml] = eeg_temp
+            EMG_epoch[subj][ml] = emg_temp
+    
+    # Provide a list of subjects to split between train and val. Exclude the test subject from this list.
+    train_subjects_ids = []
+    for subj in SUBJECT_IDs:
+        if subj not in TEST_SUBJECT:
+            train_subjects_ids.append(subj)
+
+    # Prepare test dataset
+    X_EEG_test, y_EEG_test = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = TEST_SUBJECT, fs = EEG_FREQ)
+    X_EMG_test, y_EMG_test = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = TEST_SUBJECT, fs = EMG_FREQ)
+    
+    test_dataset_ins = MultiManageDataset(X_EEG_test, X_EMG_test, y_EEG_test, y_EMG_test)
+    
+    #========================================================#
+    # THESE PARAMETERS ARE CHANCEABLE, DEPENDING ON THE TASK #
+    #========================================================#
+    MAX_NUM_TRIALS = 50             # 75 - 250 (simply to max) 
+    NUM_INITIAL_DATA_POINTS = 30
+    EEG_CH = X_EEG_test.shape[2]
+    EMG_CH = X_EMG_test.shape[2]
+    EEG_CLASSES = 3
+    EMG_CLASSES = 5
+    TOTAL_CLASSES = EMG_CLASSES
+    NUM_EPOCHS = 250                 # 150 - 200
+    PATIENCE = 25                   # Early stopping patience - 25
+    
+    #===========#
+    # Constants #
+    #===========#
+    global_best_vloss = float("inf")                # Used to only save one model.
+
+    #====================================#
+    # SHERPA Hyperparameter Optimazation #
+    #====================================#
+
+    parameters = model_handler_ins.get_hyperparameters()
+    
+    # algorithm = sherpa.algorithms.RandomSearch(max_num_trials = MAX_NUM_TRIALS)
+    algorithm = sherpa.algorithms.GPyOpt(
+        max_num_trials = MAX_NUM_TRIALS,
+        acquisition_type = 'EI',                     # Expected improvement
+        num_initial_data_points = NUM_INITIAL_DATA_POINTS                 # Number of hyperparameter configurations before model learns
+    )
+    # Study represents the hyperparameter optimization itself
+    study = sherpa.Study(
+        parameters = parameters,
+        algorithm = algorithm,
+        lower_is_better = True,
+        disable_dashboard = True
+    )
+
+    splits = Kfold_ins.create_kfold_splits_subject_independent(subject_ids = train_subjects_ids, k = 8)
+
+    for trial in study:
+        model_config = model_handler_ins.build_model_config(
+            trial,
+            EEG_CH, EMG_CH,
+            EEG_CLASSES, EMG_CLASSES,
+            TOTAL_CLASSES
+        )
+        train_config = model_handler_ins.build_training_config(
+            trial = trial
+        )
+
+        FOLD_INFO = []
+
+        config = {
+            "model_config" : model_config,
+            "lr": train_config["lr"],
+            "weight_decay": train_config["weight_decay"],
+            "batch_size": train_config["batch_size"],
+            "epochs": NUM_EPOCHS,
+            "patience": PATIENCE,
+            "eeg_freq" : EEG_FREQ,
+            "rms_freq" : RMS_FREQ
+            }
+
+        for fold, (train_ids, val_ids) in enumerate(splits):
+
+            print_config = {
+                'trial_id': trial.id,
+                'max_num_trials': MAX_NUM_TRIALS,
+                'fold': fold,
+            }
+
+            best_info = Kfold_ins.train_one_fold(
+                        model_handler_ins = model_handler_ins,
+                        train_eval_ins = train_eval_ins,
+                        split_ins = split_ins,
+                        X_epoch = (EEG_epoch, EMG_epoch),
+                        train_ids = train_ids,
+                        val_ids = val_ids,
+                        config = config, 
+                        device = device,
+                        print_config = print_config,
+                        single_or_fusion = 'Fusion')
+
+            FOLD_INFO.append(best_info)
+        
+        fold_val_losses = [f["val_loss"] for f in FOLD_INFO]
+        fold_val_accs   = [f["val_acc"] for f in FOLD_INFO]
+        fold_train_losses = [f["train_loss"] for f in FOLD_INFO]
+        fold_epochs     = [f["epoch"] for f in FOLD_INFO]
+
+        avg_fold_vloss = np.mean(fold_val_losses)
+        avg_fold_epochs = int(np.round(np.mean(fold_epochs)))
+
+        # Load new model
+        # Train on all data
+        # Extract the model to do inference
+        retrain_model, retrain_criterion, retrain_optimizer = Kfold_ins.retrain_model(
+            model_handler_ins = model_handler_ins,
+            train_eval_ins = train_eval_ins,
+            split_ins = split_ins,
+            X_epoch = (EEG_epoch, EMG_epoch),
+            train_subjects_ids = train_subjects_ids,
+            config = config,
+            mean_epochs = avg_fold_epochs,
+            device = device,
+            print_config = print_config
+        )
+        
+        # Prepara test dataset for inference
+        test_loader  = DataLoader(test_dataset_ins, batch_size = config["batch_size"], shuffle=False)
+        avg_test_loss, test_acc, predictions, labels = train_eval_ins.inference_one_epoch(model = retrain_model, test_loader = test_loader, criterion = retrain_criterion, device = device)
+
+        study.add_observation(
+            trial = trial,
+            objective = avg_fold_vloss,
+            iteration = 0
+        )
+
+        study.finalize(trial)
+
+        if avg_fold_vloss < global_best_vloss :
+            global_best_vloss = avg_fold_vloss
+            
+            torch.save({
+                "model_name": model_name,
+                "sensor_name": 'fusion',
+                "model_state": retrain_model.state_dict(),
+                "model_args": model_config, 
+                "optimizer_state_dict": retrain_optimizer.state_dict(),
+                "hyperparameters": trial.parameters,}, 
+                r'{}\model.pth'.format(log_dir))
+
+
+        logger_ins.log_trial(
+            trial_id=trial.id,
+            hyperparams = trial.parameters,
+            best_epoch = fold_epochs,
+            train_loss = fold_train_losses,
+            val_loss = fold_val_losses,
+            val_acc = fold_val_accs,
+            test_loss = avg_test_loss,
+            test_acc = test_acc,
+            preds = predictions,
+            labels = labels)
+            
+        # writer.close()                            # NOTE: Enable with tensorboard
+        study.finalize(trial, status = 'COMPLETED')
+
 
 def singleNet_classfication_independent(subject_name : str | list, sherpa_log_folder : str = 'subject_dependent/SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = 'SingleNet_LSTM'):
     # When chancing between EEG and EMG
