@@ -23,7 +23,7 @@ from src.models.classification_pipeline import SingleNet_CNN_LSTM_ATTENTION, EMG
 
 
 # Data types
-from typing import Tuple, Dict #List
+from typing import Tuple, Dict, List
 
 #==================#
 # Global variables #
@@ -42,19 +42,17 @@ EEG_HIGHCUT = 30
 EEG_NUM_CH = len(EEG_USEABLE_CHANNELS)
 EMG_NUM_CH = 3
 
-RMS_SAMPLING_WINDOW = 200           # 500 samples - 250 ms                      32 samples - 16 ms                                       
+RMS_SAMPLING_WINDOW = 500           # 500 samples - 250 ms                      32 samples - 16 ms                                       
 RMS_WINDOW_STEPSIZE = 25            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
 
-HAMPEL_WINDOWSIZE = 100
-HAMPEL_SIGMA = 3                    # Usually 2
+HAMPEL_WINDOWSIZE = 100 
+HAMPEL_SIGMA = 2                   # Usually 2
 
 SLIDING_WINDOW_SAMPLES = 1000
 SLIDING_WINDOW_STEPSIZE = 200
 
 EMG_SELECT_SENSORS = (0, 2)
 EMG_SAMPLES_PER_READ = 200
-
-state = "REST"
 
 EMG_CONFIG_DICT = {
     'rms_windowsize' : RMS_SAMPLING_WINDOW,
@@ -158,20 +156,30 @@ class Buffer:
         return window
 
 class Model():
-    def __init__(self, path_to_model : Path):
+    def __init__(self, path_to_model : Path, num_motions = 2):
         self.path_dir = path_to_model
         self.model = None
         self.device = None
 
         self.initilize_model()
 
-        self.pred_mapping = {
-            0 : 'Index Contract',
-            1 : 'Index Release',
-            2 : 'Thumb Contract',
-            3 : 'Thumb Release',
-            4 : 'Rest'
-        }
+        self.pred_mapping = {}
+
+        actions = ['Contract', 'Release']
+        if num_motions == 2:
+            target = ['Index', 'Thumb']
+        elif num_motions == 7:
+            target = ['Pinky', 'Ring', 'Middle', 'Index', 'Thumb', 'Pinch', 'Cylinder']
+        else:
+            raise ValueError(f'num_motion invalid : {num_motions}')
+
+        
+        label_idx = 0
+        for targ in target:
+            for act in actions:
+                self.pred_mapping[label_idx] = targ + ' ' + act
+                label_idx += 1
+        self.pred_mapping[label_idx] = 'Rest'
 
     def initilize_model(self):
         if not os.path.exists(self.path_dir):
@@ -211,30 +219,48 @@ class Model():
         return pred_map, confidence
     
 class StateLogic():
-    def __int__(self):
-        pass
+    def __init__(self):
+        self.state = 'REST'
+        self.active_target = None   # e.g. INDEX, THUMB, PINCH
 
     def update(self, pred, confidence):
-        global state
 
-        if confidence < 0.6:
-            return state
+        if confidence < 0.7:
+            return self.state
 
-        if state == "REST":
-            if pred == "Index Contract":
-                state = "INDEX_ACTIVE"
-            elif pred == "Thumb Contract":
-                state = "THUMB_ACTIVE"
+        parts = pred.split()
 
-        elif state == "INDEX_ACTIVE":
-            if pred == "Index Release":
-                state = "REST"
+        if len(parts) != 2 or pred == 'REST':         # pred don't have two parts. This is used for REST
+            return self.state
 
-        elif state == "THUMB_ACTIVE":
-            if pred == "Thumb Release":
-                state = "REST"
+        # Target is the limb type
+        # Action is contract, release
+        target, action = parts[0].upper(), parts[1].upper()
 
-        return state
+        # ======================
+        # REST → ACTIVATE
+        # ======================
+        if self.state == "REST":
+            if action == "CONTRACT":
+                self.state = f"ACTIVATE_{target}"
+                self.active_target = target
+
+        # ======================
+        # ACTIVE → RETURN
+        # ======================
+        elif self.state.startswith("ACTIVATE"):
+            if action == "RELEASE" and target == self.active_target:
+                self.state = f"RETURN_{target}"
+
+        # ======================
+        # RETURN → REST
+        # ======================
+        elif self.state.startswith("RETURN"):
+            if action == "RELEASE" and target == self.active_target:
+                self.state = "REST"
+                self.active_target = None
+
+        return self.state
 
 ''' examine_latency
 def examine_latency():
@@ -319,10 +345,10 @@ def Trigno_test():
         print(data.mean())
     
 
-def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0'):
+def main(model_folder_name : str = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0', num_motions : int = 2):
     model_path_folder = Path(__file__).resolve().parents[1] / f"models/loggings/real_time/{model_folder_name}"
 
-    MODEL = Model(path_to_model = model_path_folder)
+    MODEL = Model(path_to_model = model_path_folder, num_motions = num_motions)
 
     STREAM = EMGRealTime(config_dict = EMG_CONFIG_DICT,
                       select_sensors = EMG_SELECT_SENSORS,
@@ -341,8 +367,8 @@ def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0
     
     STATE = StateLogic()
 
-    # mu = np.load(model_path_folder / "mu.npy")
-    # sigma = np.load(model_path_folder / "sigma.npy")
+    mu = np.load(model_path_folder / "mu.npy")
+    sigma = np.load(model_path_folder / "sigma.npy")
 
     
     STREAM.start_stream()                      # Initilize streaming
@@ -415,10 +441,10 @@ def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0
                 continue
             
             # Normalize
-            # X_norm = (X_pre - mu) / (sigma + 1e-8)
+            X_norm = (X_pre - mu) / (sigma + 1e-8)
 
             # Insert into model
-            X_pred, confidence = MODEL.predict(input_data = X_pre)
+            X_pred, confidence = MODEL.predict(input_data = X_norm)
             
             # Output of the model
             state = STATE.update(pred = X_pred, confidence = confidence)
@@ -446,9 +472,8 @@ def main(model_folder_name : 'str' = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0
         
 
 if __name__ == "__main__":
-    model_folder_name = 'SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_noNorm/subject_0'
+    model_folder_name = 'SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight_7motions/subject_0'
     
-    main(model_folder_name = model_folder_name)
-
+    main(model_folder_name = model_folder_name, num_motions = 7)
 
 

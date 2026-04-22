@@ -3728,8 +3728,9 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
         print('         validation acc' , best_value['validation_accuracy'])
         print('         Test accuracy: ', best_value["test_accuracy"])
         print('         Hyperparameter: ', best_value['hyperparameters'])
+        np.set_printoptions(linewidth=200)
         print(cm)
-        print('\n')
+        #print('\n')
 
 def singleNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LSTM_EMG'):
     # model_path_folder = Path(__file__).resolve().parent / f"loggings/{sherpa_log_folder}/{subject_name}"

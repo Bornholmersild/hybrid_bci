@@ -63,6 +63,61 @@ REJECT_CONFIG_DICT = {
     'EMG_ch_acceptance' : 0
 }
 
+class SimulationStateLogic():
+    def __init__(self):
+        self.state = "REST"
+        self.busy = False   
+
+    def update(self, pred, confidence, finished):
+        '''
+        Update prediciton state
+        '''
+        # If currently executing → ignore predictions
+        if self.busy:
+            if finished:
+                self._transition_after_finish()
+            return self.state
+
+        # Ignore low confidence
+        if confidence < 0.6:
+            return self.state
+
+        # Only allow transitions when NOT busy
+        if self.state == "REST":
+            if pred == "Index Contract":
+                self.state = "ACTIVATE_INDEX"
+                self.busy = True
+
+            elif pred == "Thumb Contract":
+                self.state = "ACTIVATE_THUMB"
+                self.busy = True
+
+        elif self.state == "ACTIVATE_INDEX":
+            if pred == "Index Release":
+                self.state = "RETURN_INDEX"
+                self.busy = True
+
+        elif self.state == "ACTIVATE_THUMB":
+            if pred == "Thumb Release":
+                self.state = "RETURN_THUMB"
+                self.busy = True
+
+        return self.state
+    
+    def _transition_after_finish(self):
+        if self.state == "ACTIVATE_INDEX":
+            self.busy = False  # wait for release
+
+        elif self.state == "RETURN_INDEX":
+            self.state = "REST"
+            self.busy = False
+
+        elif self.state == "ACTIVATE_THUMB":
+            self.busy = False
+
+        elif self.state == "RETURN_THUMB":
+            self.state = "REST"
+            self.busy = False
 
 def prepare_joints(mujoco_model, env_data, env, actions, THUMB_JOINT):
     #======================#
@@ -123,6 +178,7 @@ def start_simulation(model_folder_name):
     THUMB_JOINT = [3,4,5,6]
     CMC_FLAG = False
     MCP_FLAG = False
+    
 
     freezed_joint_ranges, original_joint_ranges = prepare_joints(mujoco_model = mujoco_model,
                                                                 env_data = env_data,
@@ -136,7 +192,7 @@ def start_simulation(model_folder_name):
     #=====================#
     # Prediction pipeline #
     #=====================#
-    model_path_folder = Path(__file__).resolve().parents[1] / f"models/loggings/real_time/{model_folder_name}"
+    model_path_folder = Path(__file__).resolve().parents[1] / f"src/models/loggings/real_time/{model_folder_name}"
 
     MODEL = Model(path_to_model = model_path_folder)
 
@@ -155,9 +211,9 @@ def start_simulation(model_folder_name):
                                     hampel_window = HAMPEL_WINDOWSIZE, hampel_sigma = HAMPEL_SIGMA,     # sigma usually 2
                                     base_dir = 'Unused')
     
-    STATE = StateLogic()
-    # mu = np.load(model_path_folder / "mu.npy")
-    # sigma = np.load(model_path_folder / "sigma.npy")
+    STATE = SimulationStateLogic()
+    mu = np.load(model_path_folder / "mu.npy")
+    sigma = np.load(model_path_folder / "sigma.npy")
 
     
     STREAM.start_stream()                      # Initilize streaming
@@ -166,6 +222,9 @@ def start_simulation(model_folder_name):
 
     try:
         while True:    
+            #====================================#
+            # Load data -> preprocess -> predict # 
+            #====================================#
             X_emg = STREAM.extract_data()               # Read data                        
             EMG_BUFFER.add_data(data = X_emg)           # Load into circular buffer
             
@@ -180,33 +239,63 @@ def start_simulation(model_folder_name):
                 print('Pre is none')
                 continue
             
-            # X_norm = (X_pre - mu) / (sigma + 1e-8)    # Normalize
-            X_pred, confidence = MODEL.predict(input_data = X_pre)      # Insert into model
-            state = STATE.update(pred = X_pred, confidence = confidence)    # Output of the model
+            X_norm = (X_pre - mu) / (sigma + 1e-8)    # Normalize
+            X_pred, confidence = MODEL.predict(input_data = X_norm)      # Insert into model
+
+            #====================#
+            # Actuate simulation #
+            #====================#
+            actions = _actuate_motors(
+                model = mujoco_model,
+                command = STATE.state,
+                actions = actions,
+                original_joint_ranges = original_joint_ranges)
+            
+            env.mj_render()                       # Render the current simulation frame            
+            env.step(actions)                        # performs a physics step
+
+            #==============================#
+            # Detect if motion is finished #
+            #==============================#
+            mcp = env_data.qpos[7]
+            cmc = env_data.qpos[4]
+
+            index_fully_contracted = mcp >= mcp_upper
+            thumb_fully_contracted = cmc >= cmc_upper
+            index_returned = mcp <= mcp_lower
+            thumb_returned = cmc <= cmc_lower
+
+            finished = False
+
+            if STATE.state == "ACTIVATE_INDEX" and index_fully_contracted:
+                finished = True
+
+            elif STATE.state == "RETURN_INDEX" and index_returned:
+                finished = True
+
+            elif STATE.state == "ACTIVATE_THUMB" and thumb_fully_contracted:
+                finished = True
+
+            elif STATE.state == "RETURN_THUMB" and thumb_returned:
+                finished = True
+
+            state = STATE.update(pred = X_pred, confidence = confidence, finished = finished)    # Output of the model
+            
             print(
             f"STATE: {state:<15} | "
             f"PRED: {X_pred:<20} | "
             f"CONF: {confidence:>6.2f}",
             end="\r"
             )
-            
-            actions = _actuate_motors(model = mujoco_model, command = state, actions = actions, original_joint_ranges = original_joint_ranges)
 
-            env.mj_render()                       # Render the current simulation frame
-            
-            env.step(actions)                        # performs a physics step
-
-            mcp = env_data.qpos[7]
-            cmc = env_data.qpos[4]
-            
-            if cmc >= cmc_upper and not CMC_FLAG:           # Freeze thumb joints when fully bend
+            if thumb_fully_contracted and not CMC_FLAG:           # Freeze thumb joints when fully bend
                 print('[Debug] enter cmc1')
                 actions[:] = 0
                 
                 _freeze_joints(model = mujoco_model, data=env_data, joints_list = THUMB_JOINT, current_joints = mujoco_model.jnt_range)
                 CMC_FLAG = True
 
-            elif cmc <= cmc_lower and CMC_FLAG:             # Disable activation when fully flexed and go to initial position
+            elif thumb_returned and CMC_FLAG:             # Disable activation when fully flexed and go to initial position
                 print('[Debug] enter cmc2')
                 actions[:] = 0
                 CMC_FLAG = False
@@ -214,22 +303,21 @@ def start_simulation(model_folder_name):
                 for i in THUMB_JOINT:
                     mujoco_model.jnt_range[i] = freezed_joint_ranges[i]
 
-            elif mcp >= mcp_upper and env_data.qpos[9] >= pm_upper and not MCP_FLAG:
+            elif index_fully_contracted and env_data.qpos[9] >= pm_upper and not MCP_FLAG:
                 print('[Debug] enter mcp1')
                 actions[:] = 0
                 
                 _freeze_joints(model = mujoco_model, data = env_data, joints_list = INDEX_JOINT, current_joints = mujoco_model.jnt_range)
                 MCP_FLAG = True
             
-            elif mcp <= mcp_lower and MCP_FLAG:
+            elif index_returned and MCP_FLAG:
                 print('[Debug] enter mcp2')
                 actions[:] = 0
                 MCP_FLAG = False
 
                 for i in INDEX_JOINT:
                     mujoco_model.jnt_range[i] = freezed_joint_ranges[i]
-            
-            time.sleep(0.1)
+
 
     except KeyboardInterrupt:
         print("\nSimulation stopped by user.")
@@ -245,23 +333,21 @@ def _actuate_motors(model, command, actions, original_joint_ranges):
     index_joints = [7,8,9,10]
     thumb_joints = [3,4,5,6]
 
-    if command == 'Index Contract':
+    if command == 'ACTIVATE_INDEX':
         _unfreeze_joints(model = model, joints_list = index_joints, OJR = original_joint_ranges)
         actions[11], actions[15] = 0.1, 0.1                       # FPS2, FDP2   
-    elif command == 'Index Release':
+    elif command == 'RETURN_INDEX':
         _unfreeze_joints(model = model, joints_list = index_joints, OJR = original_joint_ranges)
         actions[19], actions[21] = 1.0, 1.0
         actions[28], actions[29] = 0.0, 0.0
 
-    elif command == 'Thumb Contract':
+    elif command == 'ACTIVATE_THUMB':
         _unfreeze_joints(model = model, joints_list = thumb_joints, OJR = original_joint_ranges)
         actions[26], actions[24] = 0.3, 0.3
 
-    elif command == 'Thumb Release':
+    elif command == 'RETURN_THUMB':
         _unfreeze_joints(model = model, joints_list = thumb_joints, OJR = original_joint_ranges)
         actions[22], actions[23] = 0.3, 0.2
-    else:
-        actions[int(command)] = 1.0
 
     return actions
 
@@ -279,13 +365,11 @@ def _unfreeze_joints(model, joints_list, OJR):
     for j in joints_list:
         model.jnt_range[j] = OJR[j]
 
-def main():
-    start_simulation()
 
 if __name__ == '__main__':
-    model_folder_name = 'SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_noNorm/subject_0'
-    main(model_folder_name = model_folder_name)
     
+    model_folder_name = 'SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight/subject_0'
+    start_simulation(model_folder_name = model_folder_name)
 
 # Actuators
 # idx name _
