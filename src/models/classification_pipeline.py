@@ -1429,7 +1429,7 @@ class KFoldManageDataset(torch.utils.data.Dataset):
         for epoch in range(config["epochs"]):
 
             train_loss = train_eval_ins.train_one_epoch(model, train_loader, criterion, optimizer, device)
-            val_loss, val_acc, _ = train_eval_ins.validaton_one_epoch(model, val_loader, criterion, device)
+            val_loss, val_acc, _ = train_eval_ins.validation_one_epoch(model, val_loader, criterion, device)            
 
             if val_loss < best_info['val_loss']:
                 best_info['val_loss'] = val_loss
@@ -1474,7 +1474,7 @@ class KFoldManageDataset(torch.utils.data.Dataset):
         elif single_or_fusion == 'fusion':
             EEG_epoch, EMG_epoch = X_epoch
             X_EEG_train, y_EEG_train = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = train_subjects_ids, fs = config['eeg_freq'])
-            X_EMG_train, y_EMG_train = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = train_subjects_ids, fs = config['emg_freq'])
+            X_EMG_train, y_EMG_train = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = train_subjects_ids, fs = config['rms_freq'])
 
             train_dataset = MultiManageDataset(X_EEG_train, X_EMG_train, y_EEG_train, y_EMG_train)
 
@@ -3135,7 +3135,7 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
     #====================#
     # Load Training data #
     #====================#
-    SUBJECT_IDs = [f'subject_{i}' for i in range(0, 17)]
+    SUBJECT_IDs = [f'subject_{i}' for i in range(0, 17)]    # 17
     TEST_SUBJECT = ['subject_8']    
     EEG_epoch = {}
     EMG_epoch = {}
@@ -3146,6 +3146,7 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
         EMG_epoch[subj] = {}
 
         for ml in motion_list:
+            print(f'Load for {subj} for {ml}')
             eeg_temp, emg_temp, _, _ = load_ins.load_EEG_EMG_data(subject_name = subj,
                                                                     finger_name = ml,
                                                                     reject_config_dict = REJECT_CONFIG_DICT,
@@ -3164,7 +3165,7 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
 
     # Prepare test dataset
     X_EEG_test, y_EEG_test = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = TEST_SUBJECT, fs = EEG_FREQ)
-    X_EMG_test, y_EMG_test = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = TEST_SUBJECT, fs = EMG_FREQ)
+    X_EMG_test, y_EMG_test = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = TEST_SUBJECT, fs = RMS_FREQ)
     
     test_dataset_ins = MultiManageDataset(X_EEG_test, X_EMG_test, y_EEG_test, y_EMG_test)
     
@@ -3250,7 +3251,7 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
                         config = config, 
                         device = device,
                         print_config = print_config,
-                        single_or_fusion = 'Fusion')
+                        single_or_fusion = 'fusion')
 
             FOLD_INFO.append(best_info)
         
@@ -3274,7 +3275,8 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
             config = config,
             mean_epochs = avg_fold_epochs,
             device = device,
-            print_config = print_config
+            print_config = print_config,
+            single_or_fusion = 'fusion'
         )
         
         # Prepara test dataset for inference
@@ -3316,7 +3318,6 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
             
         # writer.close()                            # NOTE: Enable with tensorboard
         study.finalize(trial, status = 'COMPLETED')
-
 
 def singleNet_classfication_independent(subject_name : str | list, sherpa_log_folder : str = 'subject_dependent/SingleNet_LSTM_EMG', sensor_name : str = None, model_name : str = 'SingleNet_LSTM'):
     # When chancing between EEG and EMG
@@ -4569,15 +4570,16 @@ def main():
     singleNet_save_path = 'subject_independent/SingleNet_CNN+LSTM_EMG'
     singleNet_model_name = 'SingleNet_CNN_LSTM_ATTENTION'
 
-    fusionNet_save_path = 'FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
+    fusionNet_save_path = 'subject_independent/FusionNet_CNN+LSTM+ATTENTION'  # noqa: F841
     fusionNet_model_name = 'FusionNet_CNN_LSTM_ATTENTION'   # noqa: F841
     
     # singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
 
-    singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
-    
+    # singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
+    for path, mod in zip(['subject_independent/FusionNet_CNN+LSTM', 'subject_independent/FusionNet_LSTM'], ['FusionNet_CNN_LSTM', 'FusionNet_LSTM']):
+        fusionNet_Kfold_classfication_independent(sherpa_log_folder = path, model_name = mod, num_motions = 2)
     
     print('Classification COMPLETE\n'
           'Time it took: ', time.time() - t0, 's')
