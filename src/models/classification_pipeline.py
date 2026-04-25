@@ -661,6 +661,10 @@ class FusionNet_LSTM(nn.Module):
         # Late fusion
         fusion_input = torch.cat([eeg_logits, emg_logits], dim=1)
 
+        # Normalize logits
+        f_mu, f_std = np.mean(fusion_input), np.std(fusion_input)
+        fusion_input = (fusion_input - f_mu) / (f_std + 1e-8)
+
         fusion_logits = self.fusion(fusion_input)
 
         return fusion_logits, eeg_logits, emg_logits
@@ -810,6 +814,10 @@ class FusionNet_CNN_LSTM(nn.Module):
 
         # Late fusion
         fusion_input = torch.cat([eeg_logits, emg_logits], dim=1)
+
+        # Normalize logits
+        f_mu, f_std = np.mean(fusion_input), np.std(fusion_input)
+        fusion_input = (fusion_input - f_mu) / (f_std + 1e-8)
 
         fusion_logits = self.fusion(fusion_input)
 
@@ -968,6 +976,10 @@ class FusionNet_CNN_LSTM_ATTENTION(nn.Module):
 
         # Late fusion
         fusion_input = torch.cat([eeg_logits, emg_logits], dim=1)
+
+        # Normalize logits
+        f_mu, f_std = torch.mean(fusion_input), torch.std(fusion_input)
+        fusion_input = (fusion_input - f_mu) / (f_std + 1e-8)
 
         fusion_logits = self.fusion(fusion_input)
 
@@ -1387,6 +1399,8 @@ class KFoldManageDataset(torch.utils.data.Dataset):
                    config, device, print_config,
                    single_or_fusion = 'single'):
         
+        single_or_fusion = str.lower(single_or_fusion)
+        
         if single_or_fusion == 'single':
             # Training set (all except test subject)
             X_train, y_train = split_ins.build_dataset_from_subjects(X_epoch = X_epoch, subjects = train_ids, fs = config['freq'])
@@ -1429,7 +1443,7 @@ class KFoldManageDataset(torch.utils.data.Dataset):
         for epoch in range(config["epochs"]):
 
             train_loss = train_eval_ins.train_one_epoch(model, train_loader, criterion, optimizer, device)
-            val_loss, val_acc, _ = train_eval_ins.validation_one_epoch(model, val_loader, criterion, device)            
+            val_loss, val_acc, _ = train_eval_ins.validate_one_epoch(model, val_loader, criterion, device)
 
             if val_loss < best_info['val_loss']:
                 best_info['val_loss'] = val_loss
@@ -1749,7 +1763,8 @@ class BandpassFilter:
             x = x[:, None]
 
         if self.zi is None:
-            self.zi = np.tile(lfilter_zi(self.b, self.a), (x.shape[1], 1)).T
+            zi_base = lfilter_zi(self.b, self.a)
+            self.zi = np.tile(zi_base[:, None], (1, x.shape[1])) * x[0]
 
         y, self.zi = lfilter(self.b, self.a, x, axis=0, zi=self.zi)
         return y
@@ -1779,7 +1794,34 @@ class NotchFilter:
 
         y, self.zi = lfilter(self.b, self.a, x, axis=0, zi=self.zi)
         return y
-    
+
+class LowpassFilter:
+    def __init__(self, fs, cutoff, order=2):
+        self.fs = fs
+        self.cutoff = cutoff
+        self.order = order
+
+        nyq = 0.5 * fs
+        normal_cutoff = cutoff / nyq
+
+        self.b, self.a = butter(order, normal_cutoff, btype='low')
+        self.zi = None
+
+    def update(self, x):
+        """
+        x: shape (N, channels)
+        """
+        if x.ndim == 1:
+            x = x[:, None]
+
+        if self.zi is None:
+            # steady-state init
+            zi_base = lfilter_zi(self.b, self.a)
+            self.zi = np.tile(zi_base[:, None], (1, x.shape[1])) * x[0]
+
+        y, self.zi = lfilter(self.b, self.a, x, axis=0, zi=self.zi)
+        return y
+
 class EMANormalizer:
     def __init__(self, alpha=0.999, eps=1e-8):
         self.alpha = alpha
@@ -1832,7 +1874,8 @@ class EMGStreamProcessor:
         self.fs = fs
         self.notch_ins = NotchFilter(fs = fs, cutoff = 50, Q = 30)
         self.bandpass_ins = BandpassFilter(fs = fs, lowcut = lowcut, highcut = highcut, order = 4)
-        self.ema_ins = EMANormalizer(alpha=0.999, eps=1e-8)
+        self.lowpass_ins = LowpassFilter(fs = fs, cutoff = 5, order = 2)
+        # self.ema_ins = EMANormalizer(alpha=0.999, eps=1e-8)
 
         self.rms_window = rms_window
         self.rms_step = rms_step
@@ -1847,6 +1890,7 @@ class EMGStreamProcessor:
         self.notch_ins = NotchFilter(fs = self.fs, cutoff = 50, Q = 30)
         self.bandpass_ins = BandpassFilter(fs = self.fs, lowcut = EMG_LOWCUT, highcut = EMG_HIGHCUT, order = 4)
         self.ema_ins = EMANormalizer(alpha=0.999, eps=1e-8)
+        self.lowpass_ins = LowpassFilter(fs = self.fs, cutoff = 5, order = 2)
         self.first_update = False
 
     def update(self, chunk):
@@ -1877,14 +1921,19 @@ class EMGStreamProcessor:
         #==================#
         # 3) RMS (sliding) #
         #==================#
-        rms = self._rms_conv(hampel, window_size = self.rms_window, step_size = self.rms_step)
+        rms = self._rms_causal(hampel, window_size = self.rms_window, step_size = self.rms_step)
 
         #==================#
         # 4) Normalization #
         #==================#
         # norm = self.ema_ins.update(rms)
 
-        return rms
+        #==================#
+        # 5) Low pass filt #
+        #==================#
+        lowpass = self.lowpass_ins.update(rms)
+
+        return lowpass
 
     def load_subject_data(self, subj : str, finger : str, modality : str, trim_period : int = 3, trial_period : int = 9):
         '''
@@ -2097,7 +2146,18 @@ class EMGStreamProcessor:
         rms = np.sqrt(mean_power)
 
         return rms[::step_size]
-  
+    
+    def _rms_causal(self, signal, window_size=200, step_size=50):
+        signal = np.asarray(signal, dtype=float)
+        power = signal ** 2
+        out = []
+
+        for end in range(window_size, len(signal) + 1, step_size):
+            start = end - window_size
+            win = power[start:end]
+            out.append(np.sqrt(np.mean(win, axis=0)))
+
+        return np.array(out)
 #=================#
 # Quick functions #
 #=================#
@@ -2139,7 +2199,7 @@ def compute_class_weights(y_train):
     print("Class weights:", class_weights)
     return class_weights
 
-def normalize_global_per_channel(X_epoch):
+def normalize_global_per_channel(X_epoch, train_subject_ids):
     """
     Compute global mean/std from TRAIN data only (no leakage),
     and apply to train/val/test for all subjects and modalities.
@@ -2164,7 +2224,7 @@ def normalize_global_per_channel(X_epoch):
     # =========================
     X_train_all = []
 
-    for subj in X_epoch:
+    for subj in train_subject_ids:
         for ml in X_epoch[subj]:
             X_train_all.append(X_epoch[subj][ml]['train'])
 
@@ -2179,17 +2239,22 @@ def normalize_global_per_channel(X_epoch):
     # =========================
     # 3) Normalize all splits
     # =========================
+    norm_epochs = {}
     eps = 1e-8
     for subj in X_epoch:
+        norm_epochs[subj] = {}
+
         for ml in X_epoch[subj]:
+            norm_epochs[subj][ml] = {}
+
             for split in ['train', 'val', 'test']:
                 X = X_epoch[subj][ml][split]
 
                 X_norm = (X - mu) / (sigma + eps)
 
-                X_epoch[subj][ml][split] = X_norm
+                norm_epochs[subj][ml][split] = X_norm
 
-    return X_epoch, mu, sigma
+    return norm_epochs, mu, sigma
 #==============================#
 # Traning of model Per subject #
 #==============================#
@@ -2261,14 +2326,14 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
                 X_epoch[subj][ml][split_name] = X_e
                 X_labels[subj][ml][split_name] = y_e
 
-    X_epoch, mu, sigma = normalize_global_per_channel(X_epoch)
+    X_filt, mu, sigma = normalize_global_per_channel(X_epoch)
     np.save(f"{log_dir}/mu.npy", mu)
     np.save(f"{log_dir}/sigma.npy", sigma)
     
     datasets = {}
     for split in ['train', 'val', 'test']:
         X, y = split_ins.build_dataset_window_relabel(
-            X_epoch = X_epoch,
+            X_epoch = X_filt,
             X_labels = X_labels,
             subjects = SUBJECTS_IDs,
             split = split
@@ -2379,7 +2444,7 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
             avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
 
             # Validate model
-            avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+            avg_vloss, vacc, _ = train_eval_ins.validate_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
             # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
@@ -2439,6 +2504,7 @@ def singleNet_classfication_real_time(subject_name : str | list, sherpa_log_fold
 
         if best_val_loss < global_best_vloss :
             global_best_vloss = best_val_loss
+            print(f'Global best vloss: {best_val_loss}. Test accuracy: {test_acc}. Val accuracy: {best_val_acc}',)
 
             torch.save({
                 "model_name": model_name,
@@ -2597,7 +2663,7 @@ def singleNet_classfication_dependent(subject_name : str | list, sherpa_log_fold
             avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
 
             # Validate model
-            avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+            avg_vloss, vacc, _ = train_eval_ins.validate_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
             # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
@@ -2819,7 +2885,7 @@ def fusionNet_classfication_dependent(subject_name : str | list, sherpa_log_fold
             avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
 
             # Validate model
-            avg_vloss, vacc, _ = train_eval_ins.validation_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+            avg_vloss, vacc, _ = train_eval_ins.validate_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
             
             # Tensor Board logging
             # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
@@ -3135,8 +3201,8 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
     #====================#
     # Load Training data #
     #====================#
-    SUBJECT_IDs = [f'subject_{i}' for i in range(0, 17)]    # 17
-    TEST_SUBJECT = ['subject_8']    
+    SUBJECT_IDs = ['subject_0', 'subject_1', 'subject_2', 'subject_3', 'subject_4'] #[f'subject_{i}' for i in range(0, 17)]
+    TEST_SUBJECT = ['subject_4']    
     EEG_epoch = {}
     EMG_epoch = {}
 
@@ -3181,6 +3247,7 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
     TOTAL_CLASSES = EMG_CLASSES
     NUM_EPOCHS = 250                 # 150 - 200
     PATIENCE = 25                   # Early stopping patience - 25
+    K_folds = 2
     
     #===========#
     # Constants #
@@ -3207,7 +3274,7 @@ def fusionNet_Kfold_classfication_independent(sherpa_log_folder : str = 'subject
         disable_dashboard = True
     )
 
-    splits = Kfold_ins.create_kfold_splits_subject_independent(subject_ids = train_subjects_ids, k = 8)
+    splits = Kfold_ins.create_kfold_splits_subject_independent(subject_ids = train_subjects_ids, k = K_folds)
 
     for trial in study:
         model_config = model_handler_ins.build_model_config(
@@ -3502,7 +3569,7 @@ def singleNet_classfication_independent(subject_name : str | list, sherpa_log_fo
             avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
 
             # Validate model
-            avg_vloss, vacc, _ = train_eval_ins.validaton_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+            avg_vloss, vacc, _ = train_eval_ins.validate_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
             # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
@@ -3574,7 +3641,7 @@ def singleNet_classfication_independent(subject_name : str | list, sherpa_log_fo
         # writer.close()                            # NOTE: Enable with tensorboard
         study.finalize(trial, status = 'COMPLETED')
 
-def fusionNet_classfication_independent(subject_name : list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', model_name : str = 'FusionNet_LSTM'):
+def fusionNet_classfication_independent(subject_name : list, sherpa_log_folder : str = 'SingleNet_LSTM_EMG', model_name : str = 'FusionNet_LSTM', num_motions = 2):
     '''
     Train a model with EEG and EMG across subjects. 
     Subjects are clearly separated between traning, validation and test split
@@ -3595,7 +3662,7 @@ def fusionNet_classfication_independent(subject_name : list, sherpa_log_folder :
     # When chancing between EEG and EMG
     # preprocessing instance
     # Load function
-    check_model(model_name = model_name, sensor_name = None)
+    check_model(model_name = model_name, sensor_name = None, num_motions = num_motions)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = torch.cuda.is_available()              # Use pin_memory if CUDA is available
     print(f"Using device: {device}")
@@ -3622,8 +3689,8 @@ def fusionNet_classfication_independent(subject_name : list, sherpa_log_folder :
     #====================#
     # Load Training data #
     #====================#
-    VALIDATE_SUBJECTS = ['subject_3', 'subject_5', 'subject_7']
-    TEST_SUBJECT = ['subject_8']
+    VALIDATE_SUBJECTS = ['subject_1']#['subject_3', 'subject_5', 'subject_7']
+    TEST_SUBJECT = ['subject_2']#['subject_8']
     data = {
     'train': {'EEG_index': [], 'EEG_thumb': [], 'EMG_index': [], 'EMG_thumb': []},
     'val':   {'EEG_index': [], 'EEG_thumb': [], 'EMG_index': [], 'EMG_thumb': []},
@@ -3791,7 +3858,7 @@ def fusionNet_classfication_independent(subject_name : list, sherpa_log_folder :
             avg_train_loss = train_eval_ins.train_one_epoch(model = model, train_loader = train_loader, criterion = criterion, optimizer = optimizer, device = device)
 
             # Validate model
-            avg_vloss, vacc, _ = train_eval_ins.validation_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
+            avg_vloss, vacc, _ = train_eval_ins.validate_one_epoch(model = model, val_loader = val_loader, criterion = criterion, device = device)
 
             # Tensor Board logging
             # writer.add_scalars('Loss', { 'Training' : avg_train_loss, 'Validation' : avg_vloss }, epoch + 1)
@@ -4576,8 +4643,8 @@ def main():
     # singleNet_classfication_real_time(subject_name = 'subject_0', sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     
     # fusionNet_classfication_acrossSubjects(subject_name = subjects, sherpa_log_folder = fusionNet_save_path, model_name = fusionNet_model_name)
-
-    # singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
+    fusionNet_Kfold_classfication_independent(sherpa_log_folder = 'TEST', model_name = 'FusionNet_CNN_LSTM_ATTENTION', num_motions = 2)
+    # # singleNet_Kfold_classfication_independent(sherpa_log_folder = singleNet_save_path, sensor_name = sensor_name, model_name = singleNet_model_name, num_motions = 2)
     for path, mod in zip(['subject_independent/FusionNet_CNN+LSTM', 'subject_independent/FusionNet_LSTM'], ['FusionNet_CNN_LSTM', 'FusionNet_LSTM']):
         fusionNet_Kfold_classfication_independent(sherpa_log_folder = path, model_name = mod, num_motions = 2)
     
@@ -4683,13 +4750,13 @@ if __name__ == '__main__':
     # % MAXPOOL IS DEACTIVATED
     # COMPLEX MODEL ENABLED
     # Norm deactivated
-    # main()
+    main()
     
     # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/SingleNet_CNN+LSTM_EMG', include_all=False)
+    # inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/SingleNet_CNN+LSTM_EMG', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]

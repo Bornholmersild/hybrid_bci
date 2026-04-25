@@ -48,7 +48,7 @@ class FusionNet_train_eval():
 
         return avg_loss
 
-    def validation_one_epoch(self, model, val_loader, criterion, device):
+    def validate_one_epoch(self, model, val_loader, criterion, device):
         '''
         Docstring for evaluate_one_epoch
 
@@ -230,7 +230,7 @@ class SingleNet_train_eval():
 
         return avg_loss
 
-    def validaton_one_epoch(self, model, val_loader, criterion, device):
+    def validate_one_epoch(self, model, val_loader, criterion, device):
         '''
         Docstring for evaluate_one_epoch
 
