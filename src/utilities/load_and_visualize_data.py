@@ -369,7 +369,7 @@ class load_datasets():
         all_RMS_data = []
 
         for EEG_file, EMG_file in zip(path_to_EEG_files, path_to_EMG_files):
-
+            
             EEG_df = pd.read_csv(EEG_file)
             EEG_raw = EEG_df.iloc[:, 1:17].to_numpy()
             
