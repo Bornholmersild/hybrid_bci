@@ -4748,9 +4748,9 @@ if __name__ == '__main__':
     # % MAXPOOL IS DEACTIVATED
     # COMPLEX MODEL ENABLED
     # Norm deactivated
-    main()
+    # main()
     
-    # fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'FusionNet_LSTM_FH')
+    fusionNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent_without_CV/FusionNet_CNN+LSTM')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
