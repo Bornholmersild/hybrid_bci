@@ -1,0 +1,35 @@
+time,marker_id,description
+0.0005562,101,Trash data in the TRIM period
+3.0005562,102,Trash data in the TRIM period
+3.0010336,10,Rest period started
+4.0010336,20,Action period started
+9.0010336,30,Release period started
+14.0012455,10,Rest period started
+15.0012455,20,Action period started
+20.0012455,30,Release period started
+25.0015147,10,Rest period started
+26.0015147,20,Action period started
+31.0015147,30,Release period started
+36.0017385,10,Rest period started
+37.0017385,20,Action period started
+42.0017385,30,Release period started
+47.0019875,10,Rest period started
+48.0019875,20,Action period started
+53.0019875,30,Release period started
+58.0022133,10,Rest period started
+59.0022133,20,Action period started
+64.0022133,30,Release period started
+69.0024526,10,Rest period started
+70.0024526,20,Action period started
+75.0024526,30,Release period started
+80.0027086,10,Rest period started
+81.0027086,20,Action period started
+86.0027086,30,Release period started
+91.0029344,10,Rest period started
+92.0029344,20,Action period started
+97.0029344,30,Release period started
+102.0031513,10,Rest period started
+103.0031513,20,Action period started
+108.0031513,30,Release period started
+113.0032807,201,Trash data in the TRIM period
+116.0032807,202,Trash data in the TRIM period

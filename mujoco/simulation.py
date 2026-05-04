@@ -33,11 +33,11 @@ EEG_HIGHCUT = 30
 EEG_NUM_CH = len(EEG_USEABLE_CHANNELS)
 EMG_NUM_CH = 3
 
-RMS_SAMPLING_WINDOW = 200           # 500 samples - 250 ms                      32 samples - 16 ms                                       
-RMS_WINDOW_STEPSIZE = 25            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
+RMS_SAMPLING_WINDOW = 500           # 500 samples - 250 ms                      32 samples - 16 ms                                       
+RMS_WINDOW_STEPSIZE = 50            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
 
 HAMPEL_WINDOWSIZE = 100
-HAMPEL_SIGMA = 3                    # Usually 2
+HAMPEL_SIGMA = 2                    # Usually 2
 
 SLIDING_WINDOW_SAMPLES = 1000
 SLIDING_WINDOW_STEPSIZE = 200

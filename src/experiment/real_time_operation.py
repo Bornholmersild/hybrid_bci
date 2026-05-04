@@ -1,9 +1,8 @@
 # Manage datasets
 import numpy as np
-import pandas as pd
 
-# import matplotlib.pyplot as plt
-# from math import ceil
+import matplotlib.pyplot as plt
+from math import ceil
 
 # Manage file paths
 from pathlib import Path
@@ -13,17 +12,17 @@ import os
 import torch
 
 # Syncronization
-from time import time, perf_counter, sleep
+from time import time, sleep
 
 # External libraries
 from src.utilities.pytrigno import TrignoEMG
 
 # Own implementations
-from src.models.classification_pipeline import SingleNet_CNN_LSTM_ATTENTION, EMGStreamProcessor
+from src.models.classification_pipeline import SingleNet_CNN_LSTM_ATTENTION, SingleNet_CNN_LSTM, EMGStreamProcessor
 
 
 # Data types
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict
 
 #==================#
 # Global variables #
@@ -43,7 +42,7 @@ EEG_NUM_CH = len(EEG_USEABLE_CHANNELS)
 EMG_NUM_CH = 3
 
 RMS_SAMPLING_WINDOW = 500           # 500 samples - 250 ms                      32 samples - 16 ms                                       
-RMS_WINDOW_STEPSIZE = 25            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
+RMS_WINDOW_STEPSIZE = 50            # 50 samples - 25 ms (90 % overlap)         16 samples - 8 ms (50 % overlap)
 
 HAMPEL_WINDOWSIZE = 100 
 HAMPEL_SIGMA = 2                   # Usually 2
@@ -194,7 +193,8 @@ class Model():
         checkpoint = torch.load(f = self.path_dir / "model.pth", map_location = self.device)
         model_args = checkpoint["model_args"]
 
-        self.model = SingleNet_CNN_LSTM_ATTENTION(**model_args)
+        # self.model = SingleNet_CNN_LSTM_ATTENTION(**model_args)
+        self.model = SingleNet_CNN_LSTM(**model_args)
 
         self.model.load_state_dict(checkpoint["model_state"])
         self.model.to(self.device)
@@ -225,13 +225,13 @@ class StateLogic():
 
     def update(self, pred, confidence):
 
-        if confidence < 0.7:
-            return self.state
+        if confidence < 0.9:
+            return self.state, False
 
         parts = pred.split()
 
         if len(parts) != 2 or pred == 'REST':         # pred don't have two parts. This is used for REST
-            return self.state
+            return self.state, False
 
         # Target is the limb type
         # Action is contract, release
@@ -260,7 +260,7 @@ class StateLogic():
                 self.state = "REST"
                 self.active_target = None
 
-        return self.state
+        return self.state, True
 
 ''' examine_latency
 def examine_latency():
@@ -372,47 +372,39 @@ def main(model_folder_name : str = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0',
 
     
     STREAM.start_stream()                      # Initilize streaming
-    '''
-    #=================================================================#
-    num_channels = EMG_SELECT_SENSORS[1] - EMG_SELECT_SENSORS[0] + 1
-    FS = 2000
-    WINDOW_SEC = 1
-    BUFFER_LEN = FS * WINDOW_SEC
+    
+    #========================    Plotting    ========================#
+    # num_channels = EMG_SELECT_SENSORS[1] - EMG_SELECT_SENSORS[0] + 1
+    # FS = 40
+    # WINDOW_SEC = 0.5 * 8
+    # BUFFER_LEN = 21 * 8
 
-    plt.ion()
-    n_cols = 2
-    n_rows = ceil(num_channels / n_cols)
+    # plt.ion()
+    # n_cols = 2
+    # n_rows = ceil(num_channels / n_cols)
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 6), sharex=True)
-    axes = axes.flatten()
+    # fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 6), sharex=True)
+    # axes = axes.flatten()
 
-    x = np.arange(BUFFER_LEN) / FS
-    lines = []
+    # x = np.arange(BUFFER_LEN) / FS
+    # history = np.zeros((BUFFER_LEN, num_channels))
+    # lines = []
 
-    for ch in range(num_channels):
-        ax = axes[ch]
-        line, = ax.plot(x, np.zeros(BUFFER_LEN), lw=1)
-        ax.set_title(f"Sensor {ch}")
-        ax.set_ylim(-0.1, 0.1)           # adjust after seeing real envelope ranges
-        ax.set_xlim(0, WINDOW_SEC)
-        lines.append(line)
+    # for ch in range(num_channels):
+    #     ax = axes[ch]
+    #     line, = ax.plot(x, np.zeros(BUFFER_LEN), lw=1)
+    #     ax.set_title(f"Sensor {ch}")
+    #     ax.set_ylim(-1, 10)           # adjust after seeing real envelope ranges
+    #     ax.set_xlim(0, WINDOW_SEC)
+    #     lines.append(line)
 
-    # Hide unused axes
-    for i in range(num_channels, len(axes)):
-        axes[i].axis("off")
+    # # Hide unused axes
+    # for i in range(num_channels, len(axes)):
+    #     axes[i].axis("off")
 
-    plt.tight_layout()
-    plt.show()
-
-                # Update plot lines
-            for ch in range(num_channels):
-                lines[ch].set_ydata(X_win[ch])
-
-            plt.pause(0.001)  # allow GUI to update (very small delay)
-
-    plt.ioff()
-    plt.show()
-    '''
+    # plt.tight_layout()
+    # plt.show()
+    
 
     #=================================================================#
     time_tracker = []
@@ -441,25 +433,47 @@ def main(model_folder_name : str = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0',
                 continue
             
             # Normalize
-            X_norm = (X_pre - mu) / (sigma + 1e-8)
+            X_norm = (X_pre - mu) / (sigma + 1e-8)            
 
             # Insert into model
             X_pred, confidence = MODEL.predict(input_data = X_norm)
             
             # Output of the model
-            state = STATE.update(pred = X_pred, confidence = confidence)
-            print(
-            f"STATE: {state:<15} | "
-            f"PRED: {X_pred:<20} | "
-            f"CONF: {confidence:>6.2f}",
-            end="\r"
-            )
+            state, new_state = STATE.update(pred = X_pred, confidence = confidence)
+            if new_state:
+                print(
+                f"STATE: {state:<15} | "
+                f"PRED: {X_pred:<20} | "
+                f"CONF: {confidence:>6.2f}",
+                end="\r"
+                )
 
             time_diff = (time() - t0) * 1000
             time_tracker.append(time_diff)
 
             if time_diff > 200:
                 print('Time different is exceed - Prediction behind')
+
+
+            # N = X_norm.shape[0]
+
+            # # shift old data left
+            # history = np.roll(history, -N, axis=0)
+
+            # # insert new data at the end
+            # history[-N:, :] = X_norm
+
+            # Update plot lines
+            # for ch in range(2):
+            #     y = history[:, ch]
+            #     lines[ch].set_ydata(y)
+
+                # ymin, ymax = np.min(y), np.max(y)
+                # margin = 0.1 * (ymax - ymin + 1e-8)
+
+                # axes[ch].set_ylim(ymin - margin, ymax + margin)
+
+            # plt.pause(0.001)  # allow GUI to update (very small delay)
             
 
     except KeyboardInterrupt:
@@ -467,12 +481,14 @@ def main(model_folder_name : str = 'SingleNet_CNN+LSTM+ATTENTION_EMG/subject_0',
     
     finally:
         STREAM.end_stream()
+        # plt.ioff()
+        
         if len(time_tracker) > 0:
             print(f'Average time after extract data {np.mean(time_tracker):.2f} ms')
         
 
 if __name__ == "__main__":
-    model_folder_name = 'SingleNet_CNN+LSTM+ATTENTION_EMG_complexModel_globalNorm_noWeight_7motions/subject_0'
+    model_folder_name = 'SingleNet_CNN+LSTM_EMG_complexModel_globalNorm_noWeight_7motions_lowpass/subject_0'
     
     main(model_folder_name = model_folder_name, num_motions = 7)
 

@@ -381,7 +381,8 @@ class RejectBadEpochs():
 
             # CALL MANUAL REJECTION FUNCTION WITH THE AUTO-REJECTED EPOCHS AS INPUT
             manualreject = self.detect_bad_epochs_manual(file, num_epoch)
-
+            # print('MANUALREJECT IS NOT ACTIVE')
+            # manualreject = np.zeros(num_epoch, dtype=bool)
             autorejct_combined = EEG_autoreject | RMS_autoreject | manualreject
 
             all_rejections_masks.append(autorejct_combined)

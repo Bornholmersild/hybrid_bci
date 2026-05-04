@@ -28,7 +28,8 @@ class PROTOCOL_con():
                  rest_duration: int = 2, 
                  onset_duration: int = 4, 
                  release_duration: int = 2,
-                 trim_duration : int = 3):
+                 trim_duration : int = 3,
+                 single_sensor = False):
         
         self.CON_SOUND, self.REL_SOUND, self.RES_SOUND = self.initialize_soundplay()
 
@@ -45,6 +46,9 @@ class PROTOCOL_con():
         self.t_onset = onset_duration
         self.t_rel = release_duration
         self.t_trim = trim_duration
+        self.ss = single_sensor
+
+        # Init communication
 
     def start(self, 
               q_ICOM_PRO : JoinableQueue, 
@@ -118,6 +122,8 @@ class PROTOCOL_con():
             barrier (multiprocessing.Barrier, optional): Synchronization barrier. Defaults to None.
         """
         print(f"Trial {epoch_idx}/{self.num_epochs}")
+
+        # Add some control here. 
         #------------#
         # Rest event #
         #------------#
@@ -214,7 +220,6 @@ class PROTOCOL_con():
         REST_sound = pygame.mixer.Sound(RES_dir)
 
         return CONTRACT_sound, RELEASE_sound, REST_sound
-
 
     def put_marker_to_queue(self,
                         send_queues_dict : dict,

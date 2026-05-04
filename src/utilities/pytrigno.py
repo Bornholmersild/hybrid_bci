@@ -321,12 +321,8 @@ class MVC(TrignoEMG):
         self.rest_window_sec = int(rest_window_sec)                          
         self.contract_window_sec = int(contract_window_sec)
         self.repetition = int(repetition)
-        self.rest_buffer = numpy.zeros((self.num_channels, rest_window_sec * self.fs * repetition))
-        self.con_buffer = numpy.zeros((self.num_channels, contract_window_sec * self.fs * repetition))
-
-        # Store values per movement
-        baseline_noise = []
-        mvc = []
+        self.rest_buffer = []
+        self.con_buffer = []
 
         ''' This includes both extensor and flexior movements
         movement = ['flexior', 'extensor']
@@ -354,15 +350,10 @@ class MVC(TrignoEMG):
 
         rest_data, contract_data = self.perform_mvc_protocol()
 
-        
-        baseline_noise = numpy.mean(rest_data, axis = 0)            # Calculate mean value for baseline
-        mvc = numpy.max(contract_data, axis = 0)                    # Extract highest peak value
-        
-        # Convert lists to numpy arrays for consistency
-        baseline_noise = numpy.array(baseline_noise)
-        mvc = numpy.array(mvc)
-        print('SHAPE:', baseline_noise.shape)
-        return baseline_noise, mvc
+        print(f"rest_data shape: {rest_data.shape}")
+        print(f"contract_data shape: {contract_data.shape}")
+   
+        return rest_data, contract_data
     
     def perform_mvc_protocol(self):
         '''
@@ -372,11 +363,12 @@ class MVC(TrignoEMG):
         '''
         self.start()
         print('[Wait] - Flushing buffer until EMG sensor values are non-zero')
-        self.prepare_buffer()
-        for i in range(3):
-            print(f'MVC protocol starts in {3-i}', end='\r')
-            time.sleep(1)
-        self.read()                                         # Remove junk
+        # self.prepare_buffer()
+
+        t0 = time.time()
+        print('Protocol starts in 3 sec')
+        while (t0 + 3) > time.time():
+            self.read()                                         # Remove junk
 
         for rep in range(self.repetition):
             print(f"Repetition {rep+1}/{self.repetition} | REST")
@@ -387,12 +379,14 @@ class MVC(TrignoEMG):
                 print(f"  Rest: {remaining}s remaining", end="\r")
 
                 samples = self.read()       # shape (channels, samples_per_read)
-                self.rest_buffer = numpy.append(self.rest_buffer, samples, axis=1)
+                self.rest_buffer.append(samples)
 
             
             print("\nCONTRACT!")
-            time.sleep(1.5)
-            self.read()
+            t0 = time.time()                # Flush data
+            while (t0 + 2) > time.time():
+                self.read()                                         # Remove junk
+                
             # ---- CONTRACT PHASE ----
             start = time.perf_counter()
             while (elapsed := time.perf_counter() - start) < self.contract_window_sec:
@@ -400,14 +394,17 @@ class MVC(TrignoEMG):
                 print(f"  Contract: {remaining}s remaining", end="\r")
 
                 samples = self.read()
-                self.con_buffer = numpy.append(self.con_buffer, samples, axis=1)
+                self.con_buffer.append(samples)
 
             print('Back to rest position')
-            time.sleep(1.5)
-            self.read()
+            t0 = time.time()                # Flush data
+            while (t0 + 2) > time.time():
+                self.read()                                         # Remove junk
             print("\nCycle complete.\n")
 
         print("MVC protocol finished.")
+        self.con_buffer = numpy.concatenate(self.con_buffer, axis = 1)
+        self.rest_buffer = numpy.concatenate(self.rest_buffer, axis = 1)
         return self.rest_buffer.T, self.con_buffer.T
     
     def prepare_buffer(self):

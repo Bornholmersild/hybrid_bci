@@ -4011,20 +4011,20 @@ def inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'SingleNet_LST
             break'''
     
     # print('Last ten')
-    # data_len = len(data['trials'])
-    # print(data_len)
-    # for idx in range(data_len - 40, data_len):
-    #     trial = data['trials'][idx]
+    data_len = len(data['trials'])
+    print('Len of trials:', data_len)
+    for idx in range(data_len - 10, data_len):
+        trial = data['trials'][idx]
 
-    #     # print('Rank:', rank + 1)
-    #     print('Trial:', idx + 1)
-    #     print('Epochs', trial['best_epoch'])
-    #     print('Training loss:' , trial['training_loss'])
-    #     print('Validation loss:', trial['validation_loss'])
-    #     print('Validation mean: ', np.mean(trial['validation_loss']))
-    #     print('Validation accuracy:', trial['validation_accuracy'])
-    #     print('Test accuracy:', trial['test_accuracy'])
-    #     print('Hyperparameters:\n', trial['hyperparameters'], '\n')
+        # print('Rank:', rank + 1)
+        print('Trial:', idx + 1)
+        print('Epochs', trial['best_epoch'])
+        print('Training loss:' , trial['training_loss'])
+        print('Validation loss:', trial['validation_loss'])
+        print('Validation mean: ', np.mean(trial['validation_loss']))
+        print('Validation accuracy:', trial['validation_accuracy'])
+        print('Test accuracy:', trial['test_accuracy'])
+        print('Hyperparameters:\n', trial['hyperparameters'], '\n')
 
     best_vloss = min(
         data["trials"],
@@ -4230,7 +4230,7 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     # model_args["emg_output_dim"] = 5
     # model_args["dense_fusion_layer"] = 16
 
-    model_interference = FusionNet_CNN_LSTM(**model_args)             # NOTE : **checkpoint["model_args"]
+    model_interference = FusionNet_LSTM(**model_args)             # NOTE : **checkpoint["model_args"]
     
     model_interference.load_state_dict(checkpoint["model_state"])
     model_interference.to(device)
@@ -4245,31 +4245,30 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
     EEG_ins = EEG_preprocessing(fs = EEG_FREQ, bandpass_lowcut = EEG_LOWCUT, bandpass_highcut = EEG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
 
-    #===========#
-    # Load data #
-    #===========#
-    EEG_epoch_index, EMG_epoch_index, _, _ = load_ins.load_EEG_EMG_data(subject_name = subject_name, finger_name = 'index', reject_config_dict = REJECT_CONFIG_DICT, EEG_preprocessing_func = EEG_ins.preprocessing_routine, EMG_preprocessing_func = EMG_ins.preprocessing_routine, EMG_config_dict = EMG_CONFIG_DICT, EEG_useable_channels = EEG_USEABLE_CHANNELS)
-    EEG_epoch_thumb, EMG_epoch_thumb, _, _ = load_ins.load_EEG_EMG_data(subject_name = subject_name, finger_name = 'thumb', reject_config_dict = REJECT_CONFIG_DICT, EEG_preprocessing_func = EEG_ins.preprocessing_routine, EMG_preprocessing_func = EMG_ins.preprocessing_routine, EMG_config_dict = EMG_CONFIG_DICT, EEG_useable_channels = EEG_USEABLE_CHANNELS)
+    TEST_SUBJECT = ['subject_8']    
+    EEG_epoch = {}
+    EMG_epoch = {}
 
-    num_index_trials = EEG_epoch_index.shape[0]
-    num_thumb_trials = EEG_epoch_thumb.shape[0]
+    motion_list = ['index', 'thumb']
+    for subj in TEST_SUBJECT:
+        EEG_epoch[subj] = {}
+        EMG_epoch[subj] = {}
 
-    X_EEG_train, X_EEG_val, X_EEG_test, y_EEG_train, y_EEG_val, y_EEG_test = split_ins.build_modality_split(
-        num_index_trials = num_index_trials,
-        num_thumb_trials = num_thumb_trials,
-        epoch_index = EEG_epoch_index,
-        epoch_thumb = EEG_epoch_thumb,
-        fs = EEG_FREQ
-    )
+        for ml in motion_list:
+            print(f'Load for {subj} for {ml}')
+            eeg_temp, emg_temp, _, _ = load_ins.load_EEG_EMG_data(subject_name = subj,
+                                                                    finger_name = ml,
+                                                                    reject_config_dict = REJECT_CONFIG_DICT,
+                                                                    EEG_preprocessing_func = EEG_ins.preprocessing_routine,
+                                                                    EMG_preprocessing_func = EMG_ins.preprocessing_routine,
+                                                                    EMG_config_dict = EMG_CONFIG_DICT,
+                                                                    EEG_useable_channels = EEG_USEABLE_CHANNELS)
+            EEG_epoch[subj][ml] = eeg_temp
+            EMG_epoch[subj][ml] = emg_temp
 
-    X_EMG_train, X_EMG_val, X_EMG_test, y_EMG_train, y_EMG_val, y_EMG_test = split_ins.build_modality_split(
-        num_index_trials = num_index_trials,
-        num_thumb_trials = num_thumb_trials,
-        epoch_index = EMG_epoch_index,
-        epoch_thumb = EMG_epoch_thumb,
-        fs = RMS_FREQ
-    )
-
+    # Prepare test dataset
+    X_EEG_test, y_EEG_test = split_ins.build_dataset_from_subjects(X_epoch = EEG_epoch, subjects = TEST_SUBJECT, fs = EEG_FREQ)
+    X_EMG_test, y_EMG_test = split_ins.build_dataset_from_subjects(X_epoch = EMG_epoch, subjects = TEST_SUBJECT, fs = RMS_FREQ)
     
     #=================#
     # Single datasets #
@@ -4290,6 +4289,9 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
     all_labels = []
     all_logits = []
     # all_context = []
+    confidence_eeg_all = []
+    confidence_emg_all = []
+    confidence_final_all = []
 
     model_interference.eval()
 
@@ -4307,7 +4309,7 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
             X_eeg, X_emg, y_eeg, y_emg = eeg.to(device), emg.to(device), eeg_lab.to(device), emg_lab.to(device)
 
             # Forward pass
-            final_logits, eeg_logits, emg_logits, _, _ = model_interference(eeg = X_eeg, emg = X_emg)
+            final_logits, eeg_logits, emg_logits = model_interference(eeg = X_eeg, emg = X_emg)
             
             # Predicted class index
             _, fusion_pred = torch.max(final_logits, dim=1)             # index of max value (predicted class)
@@ -4334,6 +4336,15 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
             #=====================================#
             eeg_pred = torch.argmax(eeg_logits, dim=1)
             emg_pred = torch.argmax(emg_logits, dim=1)
+
+            # Calculate confidence
+            eeg_conf, _ = torch.max(torch.softmax(eeg_logits, dim=1), dim=1)
+            emg_conf, _ = torch.max(torch.softmax(emg_logits, dim=1), dim=1)
+            final_conf, _ = torch.max(torch.softmax(final_logits, dim=1), dim=1)
+            confidence_eeg_all.append(eeg_conf)
+            confidence_emg_all.append(emg_conf)
+            confidence_final_all.append(final_conf)
+
             correct_eeg += (eeg_pred == y_eeg).sum().item()
             correct_emg += (emg_pred == y_emg).sum().item()
             loss_final_all += loss_final.item()
@@ -4344,6 +4355,10 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
         all_preds = torch.cat(all_preds).numpy()
         all_labels = torch.cat(all_labels).numpy()
         all_logits = torch.cat(all_logits).numpy()
+
+        confidence_eeg_all = torch.cat(confidence_eeg_all).numpy()
+        confidence_emg_all = torch.cat(confidence_emg_all).numpy()
+        confidence_final_all = torch.cat(confidence_final_all).numpy()
         # all_context = torch.cat(all_context).numpy()
 
         num_batches = len(test_loader)
@@ -4356,7 +4371,10 @@ def fusionNet_inspect_model(subject_name = 'subject_0', sherpa_log_folder = 'Sin
         print(f'EEG accuracy : {(correct_eeg / total) * 100 :.2f}')
         print(f'EMG accuracy : {(correct_emg / total) * 100 :.2f}')
         print(f"Fusion accuracy: {(correct_fusion / total) * 100 :.2f}")
-
+        print('\n-------Confidence---------\n')
+        print(f'EEG confidence : {confidence_eeg_all.mean() * 100 :.2f}')
+        print(f'EMG confidence : {confidence_emg_all.mean() * 100 :.2f}')
+        print(f'Fusion confidence: {confidence_final_all.mean() * 100 :.2f}')
         #==========#
         # Analysis #
         #==========#
@@ -4755,12 +4773,12 @@ if __name__ == '__main__':
     # Norm deactivated
     # main()
     
-    fusionNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent_without_CV/FusionNet_CNN+LSTM')
+    # fusionNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/FusionNet_LSTM_norm')
     # singleNet_inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'SingleNet_CNN+LSTM+ATTENTION_EMG')
 
     # for model in ['subject_dependent/SingleNet_LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM_EEG','subject_dependent/SingleNet_CNN+LSTM+ATTENTION_EEG']:
-    for path in ['subject_independent/FusionNet_LSTM_norm', 'subject_independent/FusionNet_CNN+LSTM', 'subject_independent/FusionNet_CNN+LSTM+ATTENTION']:
-        inspect_model(subject_name = 'all_subjects', sherpa_log_folder = path, include_all=False)
+    # for path in ['subject_independent/FusionNet_LSTM_norm', 'subject_independent/FusionNet_CNN+LSTM_norm', 'subject_independent/FusionNet_CNN+LSTM+ATTENTION']:
+    inspect_model(subject_name = 'all_subjects', sherpa_log_folder = 'subject_independent/FusionNet_LSTM_norm', include_all=False)
 
     # summary_accuracies()
     # subjects = [f'subject_{i}' for i in range(17)]

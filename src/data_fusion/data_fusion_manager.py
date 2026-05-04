@@ -19,7 +19,8 @@ from .EMG_collector import EMG_con as EMG
 from .EEG_collector import EEG_con as EEG
 #from ..utilities.dynamixel_control import main as MC
 from ..utilities.create_record_folders import create_recording_folder
-from ..experiment.experimental_protocol import PROTOCOL_con as PROTOCOL
+# from ..experiment.experimental_protocol import PROTOCOL_con as PROTOCOL
+from ..experiment.metabolic_cost_exp import Exp1BendFingerProtocol as PROTOCOL
        
 current_dir = Path(__file__).resolve().parent     # folder of current script
 parent_dir = current_dir.parent                   # one level up
@@ -27,14 +28,14 @@ parent_dir = current_dir.parent                   # one level up
 #-----------#
 # Constants #
 #-----------#
-METHOD = '_ EEG EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
+METHOD = '_ _ EMG'                                     # Select method in MODES by filled out blank: _ _ _. Where 'all' -> MC EEG EMG
 BASE_PATH = str(parent_dir) + r'\experiment\data'       # Where to store DATA
-SUBJECT_NAME = "subject_0"                 # Name of the subject : subject 0, subject 1
-FINGER_NAME = 'flex_noise_finger'                       # Name of the data file      - flex_baseline_finger -> 6 epochs
-NUM_EPOCHS = 30                                        # Number of epochs per experiment
-REST_DURATION = 3                                       # Rest duration (sec) during 1 trial
-ONSET_DURATION = 3                                      # ONSET duration (sec) during 1 trial
-REL_DURATION = 3                                        # Release duration (sec) during 1 trial
+SUBJECT_NAME = "metabolic_cost/subject_1"                 # Name of the subject : subject 0, subject 1
+FINGER_NAME = 'flex_index_finger'                       # Name of the data file      - flex_baseline_finger -> 6 epochs
+NUM_EPOCHS = 10                                        # Number of epochs per experiment
+REST_DURATION = 1                                       # Rest duration (sec) during 1 trial
+ONSET_DURATION = 5                                      # ONSET duration (sec) during 1 trial
+REL_DURATION = 5                                        # Release duration (sec) during 1 trial
 TRIM_DURATION = 3                                       # Trim duration (sec) in the beginning and end of experiment
 MC_PORT = 'COM8'                                        # Define MC port
 EEG_PORT = 'COM9'                                       # Define EEG port
@@ -57,6 +58,9 @@ MODES = {
     execute_protocol : Change experiment protocol
     file_path : Can add description infront of 'current_time'. Like filepath_MC = folders["MC"] / f"Example_{current_time}.csv"
 * Remember to check when processes start and it might need to be shifted
+***
+Notice protocol is changed to new version
+***
 ''' 
 
 def MC_start(q_MC, q_ICOM_MC, q_RCOM_MC, barrier_init, stream_on_event):
@@ -185,14 +189,19 @@ def listen_for_terminal_input(q_i_MC : Optional[JoinableQueue],
 
 def check_sensor_status(q_r_EEG : JoinableQueue,
                         q_r_EMG : JoinableQueue,
-                        stream_on_event : Any):
+                        stream_on_event : Any,
+                        sensor_usage : str):
     '''
     The protocol process sends messages to the EEG and EMG queues when they are ready to start streaming.
     This function listens to those queues and sets the stream_on_event when both sensors are ready.
     '''
-    EEG_ready = False
-    EMG_ready = False     
+    if sensor_usage == 'EMG_only':                      # Only consider EMG sensor to be active
+        EEG_ready, EMG_ready = True, False
+    else:                                               # Consider both sensors to be active
+        EEG_ready, EMG_ready = False, False
+
     msg = 'False'
+
     while not stream_on_event.is_set():
 
         if not EEG_ready and not q_r_EEG.empty():
@@ -281,7 +290,6 @@ def build_system(active_modes : Dict):
     
     return queues, processes, barrier_init, shutdown_event, stream_on_event
 
-
 def main():
     if METHOD not in MODES:
         raise ValueError('Invalid method')
@@ -307,10 +315,18 @@ def main():
         daemon = True
     )
 
+    # Quick fix:
+    #   Allow check_sensor_status will only consider EMG responds.
+    #   Ignore EEG sensor
+    if METHOD == '_ _ EMG':                 
+        sensor_usage = 'EMG_only'
+    else:
+        sensor_usage = 'EMG_EEG'
+
     # Respond from processes using sensors
     start_streaming = threading.Thread(
         target = check_sensor_status,
-        args = (q_r_EEG, q_r_EMG, stream_on_event),
+        args = (q_r_EEG, q_r_EMG, stream_on_event, sensor_usage),
         daemon = True
     )
 

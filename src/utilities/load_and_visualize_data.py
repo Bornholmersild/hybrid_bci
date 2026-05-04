@@ -11,6 +11,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
+# Stat
+from scipy.stats import wilcoxon
+import itertools
+
 from scipy.signal import welch
 # From own implementations
 from src.utilities.preprocessing import Filtering, EEG_preprocessing, EMG_preprocessing, RejectBadEpochs
@@ -241,14 +245,16 @@ class load_datasets():
         RMS_epoch = RMS.reshape(total_epochs, RMS.shape[0] // total_epochs, RMS.shape[1])
         EMG_epoch = EMG.reshape(total_epochs, EMG.shape[0] // total_epochs, EMG.shape[1]) if EMG is not None else None
 
-        RMS_epoch_clean = RMS_epoch[~reject_mask]
-        EMG_epoch_clean = EMG_epoch[~reject_mask] if EMG is not None else None
+        print('REJECT BAD EPOCH IS NOT ACTIVE')
+        RMS_epoch_clean = RMS_epoch#[~reject_mask]
+        EMG_epoch_clean = EMG_epoch#[~reject_mask] if EMG is not None else None
 
-        filt_ins = Filtering()
-        RMS_epoch_norm = filt_ins.zscore(RMS_epoch_clean, mode = 'within_ch')
-        EMG_epoch_norm = filt_ins.zscore(EMG_epoch_clean, mode = 'within_ch') if EMG is not None else None
+        print('NORMALIZATION IS NOT ACTIVE')
+        # filt_ins = Filtering()
+        # RMS_epoch_norm = filt_ins.zscore(RMS_epoch_clean, mode = 'within_ch')
+        # EMG_epoch_norm = filt_ins.zscore(EMG_epoch_clean, mode = 'within_ch') if EMG is not None else None
 
-        return RMS_epoch_norm, EMG_epoch_norm, epochs_overview
+        return RMS_epoch_clean, EMG_epoch_clean, epochs_overview
     
     def _extract_EMG_data(self,
                           path_to_data_files : Union[list | Path],
@@ -746,7 +752,7 @@ class visualize_EMG():
                 self.toolbox_ins.add_markers_to_plot(plt_axis = ax, marker_file = markers, stop_markers_at = stop_marker)
 
         fig.tight_layout()
-        #plt.savefig('edited_images/EMG_data_analysis/meanEpoch_DataDriftAndNorm_withinCH.png')
+        # plt.savefig('EEG_exp1_active.png')       # edited_images/metabolic_cost/
         
         # Plot in full screen
         manager = plt.get_current_fig_manager()
@@ -997,6 +1003,251 @@ def quick_visulize():
     all_ch = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     # vis_EEG_ins.plot_egg_across_channels(EEG, markers = 0, display_window = 0, ch_list = all_ch, channels_per_figure=3)
     # vis_EEG_ins.plot_egg_across_channels(EEG_epoch.mean(axis=0), markers = markers, display_window = 0, ch_list = all_ch, channels_per_figure=3)
+
+def compute_mvc(base_dir, fs, EMG_ins, EMG_config_dict):
+    baseline_rest = pd.read_csv(f'{base_dir}/MVC_baseline_noise.csv').to_numpy()
+    baseline_contract = pd.read_csv(f'{base_dir}/MVC_baseline_mvc.csv').to_numpy()
+
+    print('Baseline', np.mean(baseline_rest, axis=0))
+    print('peak', np.max(baseline_contract, axis=0))
+
+    EMG_filter_ins = Filtering(fs = fs)    
+
+    data_container = {}    
+    
+    for segment, data in zip(['rest', 'contract'], [baseline_rest, baseline_contract]):
+        EMG_notch = EMG_filter_ins.notch(data, cutoff=50, Q=30)
+        EMG_bandpass, _ = EMG_filter_ins.butter_bandpass(EMG_notch, lowcut = EMG_ins.lowcut, highcut = EMG_ins.highcut, order=4)
+
+        EMG_hampel = EMG_filter_ins.hampel_filter(x = EMG_bandpass, window_size = EMG_config_dict['hampel_windowsize'], n_sigmas = EMG_config_dict['hampel_sigma'])
+
+        RMS = EMG_ins.rms_conv(signal = EMG_hampel, window_size = EMG_config_dict['rms_windowsize'], step_size = EMG_config_dict['rms_stepsize'])
+
+        data_container[segment] = RMS
+    
+    baseline = np.mean(data_container['rest'], axis = 0)          # Baseline noise across channels
+    peak = np.max(data_container['contract'], axis = 0)           # Max peak across 
+    
+    print('Baseline', baseline)
+    print('peak', peak)
+    
+    return baseline, peak
+
+def mvc_normalization(emg, baseline_noise, baseline_peak):
+    return (emg - baseline_noise) / (baseline_peak - baseline_noise)
+
+def compute_metabolic_cost():
+    #===========#
+    # Load data #
+    #===========#
+    EMG_FREQ = 2000
+    EMG_HIGHCUT = 450
+    EMG_LOWCUT = 20        # 32
+    TRIM_PERIOD = 3
+    RMS_SAMPLING_WINDOW = 500           # 250 ms
+    RMS_WINDOW_STEPSIZE = 50            # 25 ms (90 % overlap)
+    HAMPEL_WINDOWSIZE = 100
+    RMS_FREQ = int(EMG_FREQ / RMS_WINDOW_STEPSIZE)
+    HAMPEL_SIGMA = 2
+    TRIAL_PERIOD = 11
+    EMG_CONFIG_DICT = {
+        'rms_windowsize' : RMS_SAMPLING_WINDOW,
+        'rms_stepsize' : RMS_WINDOW_STEPSIZE,
+        'hampel_windowsize' : HAMPEL_WINDOWSIZE,
+        'hampel_sigma' : HAMPEL_SIGMA,
+        'hampel_plot_option' : [False, None],
+        'include_EMG' : True
+    }
+    REJECT_CONFIG_DICT = {
+        'EEG_epoch_rejection_tolerance' : 6,
+        'EMG_epoch_rejection_tolerance' : 6,
+        'EEG_ch_acceptance' : 0,
+        'EMG_ch_acceptance' : 0
+    }
+    base_dir = Path().resolve() / 'src/experiment/data/metabolic_cost'
+    load_ins = load_datasets(base_dir = base_dir)
+    EMG_ins = EMG_preprocessing(fs = EMG_FREQ, bandpass_lowcut = EMG_LOWCUT, bandpass_highcut = EMG_HIGHCUT, trial_period = TRIAL_PERIOD, trim_period = TRIM_PERIOD)
+
+    mvc_baseline_noise, mvc_peak = compute_mvc(base_dir = base_dir, fs = EMG_FREQ, EMG_ins = EMG_ins, EMG_config_dict = EMG_CONFIG_DICT)
+    
+    RMS_dict = {}
+    EMG_dict = {}
+    epochs_overview = []
+    motion_list = ['noexo', 'passiv', 'active']
+    for motion in motion_list:
+        rms_temp, emg_temp, num_epoch = load_ins.load_EMG_data(subject_name = 'subject_1',
+                                                        finger_name = motion,
+                                                        EMG_config_dict = EMG_CONFIG_DICT,
+                                                        reject_config_dict = REJECT_CONFIG_DICT,
+                                                        preprocessing_func = EMG_ins.preprocessing_routine)
+        
+        RMS_dict[motion] = mvc_normalization(rms_temp, mvc_baseline_noise, mvc_peak)
+        EMG_dict[motion] = mvc_normalization(emg_temp, mvc_baseline_noise, mvc_peak)
+        # RMS_dict[motion] = rms_temp
+        # EMG_dict[motion] = emg_temp
+
+        epochs_overview.append(num_epoch)
+    #Plot
+
+    # Baseline correction
+    for motion in motion_list:
+        baseline = np.mean(RMS_dict[motion][:, 0:RMS_FREQ*1, :], axis=1, keepdims=True)
+        RMS_dict[motion] = RMS_dict[motion] - baseline
+
+    total_epochs = np.sum(epochs_overview)
+    sel_motion = 'active'
+    RMS = RMS_dict[sel_motion].reshape(-1, 3)
+    EMG = np.zeros_like(EMG_dict[sel_motion].reshape(-1, 3))
+    # vis_EMG_ins = visualize_EMG(fs = EMG_FREQ, rms_sampling_window = RMS_SAMPLING_WINDOW, rms_windows_stepsize = RMS_WINDOW_STEPSIZE, total_epochs = total_epochs, trial_period = TRIAL_PERIOD)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG, rms = RMS, markers = None, display_window = 0)
+    # vis_EMG_ins.plot_rms_across_channels(emg = EMG_dict[sel_motion].mean(axis=0), rms = RMS_dict[sel_motion].mean(axis = 0), markers = None, display_window = 0)
+        
+    def plot_compare_metabolic_cost(RMS_dict, RMS_FREQ):
+
+        motions = list(RMS_dict.keys())
+        motion_colors = {
+        'noexo': "#6BA4FF",
+        'passiv': "#83FFA0",
+        'active': "#FF6469"
+        }
+
+        # Create 3 stacked subplots (one per channel)
+        fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True, sharey=True)
+
+        for key in motions:
+            data = RMS_dict[key].mean(axis=0) * 100   # (time, channels)
+
+            time = np.arange(data.shape[0]) / RMS_FREQ
+
+            for ch in range(3):
+                axes[ch].plot(time, data[:, ch], label=key, linewidth=1.5, color=motion_colors[key])
+                axes[ch].set_xlim(0, 11)
+        
+        # for ch in range(3):
+        #     # Onset line (1 sec)
+        #     axes[ch].axvline(1, color='salmon', linestyle='--', linewidth=0.8)
+        #     axes[ch].axvline(6, color='salmon', linestyle='--', linewidth=0.8)
+
+        #     if ch < 1:
+        #         axes[ch].text(
+        #             1,
+        #             axes[ch].get_ylim()[1]*0.9,
+        #             'Onset',
+        #             color='salmon',
+        #             rotation=90,
+        #             verticalalignment='top'
+        #         )
+
+        #         # Offset line (6 sec)
+        #         axes[ch].text(
+        #             6,
+        #             axes[ch].get_ylim()[1]*0.9,
+        #             'Offset',
+        #             color='salmon',
+        #             rotation=90,
+        #             verticalalignment='top'
+        #         )
+            
+
+        # Styling
+        channel_names = ["Channel 1", "Channel 2", "Channel 3"]
+
+        for ch in range(3):
+            axes[ch].set_ylabel("RMS (a.u.)")
+            axes[ch].set_title(channel_names[ch])
+            axes[ch].grid(True, alpha=0.3)
+            axes[ch].legend(loc="upper right")
+
+        axes[-1].set_xlabel("Time (s)")
+    
+
+        fig.suptitle("Metabolic Cost Proxy (RMS EMG)", fontsize=14)
+        plt.tight_layout()
+        plt.savefig('Metabolic Cost Proxy.png', dpi=400)
+        plt.show()
+
+    plot_compare_metabolic_cost(RMS_dict = RMS_dict, RMS_FREQ = RMS_FREQ)
+    
+    dt = 1 / RMS_FREQ
+    for motion in motion_list:
+        data = RMS_dict[motion].reshape(-1, 3)
+        effort = 0
+        
+        for i in range(data.shape[1]):  # loop over channels
+            effort_i = np.sum(data[:, i]**2) * dt
+            effort += effort_i
+
+        print(f'effort for {motion} = {effort}\n')
+
+    # Wilcoxon statistics:
+    def compute_metabolic_cost_epochs(RMS_dict, RMS_FREQ):
+        """
+        Compute metabolic cost per epoch for each motion.
+
+        Parameters
+        ----------
+        RMS_dict : dict
+            Dict containing RMS data:
+            shape = (epochs, samples, channels)
+
+        RMS_FREQ : int or float
+            RMS sampling frequency (e.g. 40 Hz)
+
+        Returns
+        -------
+        effort_dict : dict
+            Dict with shape:
+            effort_dict[motion] = (epochs,)
+        """
+
+        dt = 1 / RMS_FREQ
+        effort_dict = {}
+
+        for motion in RMS_dict.keys():
+
+            # shape = (epochs, samples, channels)
+            data = RMS_dict[motion]
+
+            num_epochs = data.shape[0]
+
+            efforts = np.zeros(num_epochs)
+
+            for ep in range(num_epochs):
+
+                effort = 0
+
+                # Loop over channels
+                for ch in range(data.shape[2]):
+
+                    # RMS already represents amplitude,
+                    # squaring approximates power
+                    effort_ch = np.sum(data[ep, :, ch]**2) * dt
+
+                    effort += effort_ch
+
+                efforts[ep] = effort
+
+            effort_dict[motion] = efforts
+
+            # print(f"{motion}")
+            # print(f"Mean effort: {np.mean(efforts):.4f}")
+            # print(f"Std effort : {np.std(efforts):.4f}\n")
+
+        return effort_dict
+
+    effort_dict = compute_metabolic_cost_epochs(RMS_dict, RMS_FREQ)
+
+    pairs = list(itertools.combinations(range(len(motion_list)), 2))
+
+    for i, j in pairs:
+        i_id = motion_list[i]
+        j_id = motion_list[j]
+
+        stat, p = wilcoxon(
+            effort_dict[i_id],
+            effort_dict[j_id]
+        )
+        print(f"Motion {i_id} vs {j_id}: p={p:.4f}, stat={stat:.4f}")
 
 def test_bad_epochs():
     from scipy.stats import norm
@@ -1696,13 +1947,15 @@ class DataAnalysis():
 
         #     for band, d in bands.items():
         #         print(f"  {band}: {d:.3f}")'''
-        
+
+
 if __name__ == '__main__':
     # remove_bad_epochs()
     
     # quick_visulize()
-    test_bad_epochs()
-
+    # test_bad_epochs()
+    compute_metabolic_cost()
+    
     # subjects = ['subject_0', 'subject_1']
     # Da_ins = DataAnalysis()
     # Da_ins.inspect_frequency_ranges(subjects = subjects)
